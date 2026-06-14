@@ -1,0 +1,24 @@
+# Compiled binary (built from main.go)
+/zone
+zone-bin
+
+# Go build/test artifacts
+*.exe
+*.test
+*.out
+*.prof
+coverage.*
+
+# Local runtime data (DB, config, daemon socket/log live in the user config dir,
+# but ignore any that get created in-tree during development)
+*.db
+*.db-wal
+*.db-shm
+*.sock
+*.log
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

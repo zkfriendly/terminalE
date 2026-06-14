@@ -1,0 +1,52 @@
+-- zone schema. All timestamps are unix epoch seconds (INTEGER).
+
+CREATE TABLE IF NOT EXISTS projects (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL,
+    color      TEXT    NOT NULL DEFAULT '',
+    archived   INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title      TEXT    NOT NULL,
+    status     TEXT    NOT NULL DEFAULT 'open',
+    archived   INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    work_sec      INTEGER NOT NULL,
+    break_sec     INTEGER NOT NULL,
+    total_sec     INTEGER NOT NULL,
+    prepare_sec   INTEGER NOT NULL DEFAULT 0,
+    started_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    ended_at      INTEGER,
+    status        TEXT    NOT NULL DEFAULT 'active',
+    -- Runtime state, persisted by the focus daemon so a session can be resumed.
+    cur_phase     TEXT    NOT NULL DEFAULT 'work',
+    cur_remaining INTEGER NOT NULL DEFAULT 0,
+    cur_cycle     INTEGER NOT NULL DEFAULT 0,
+    accrued_sec   INTEGER NOT NULL DEFAULT 0,
+    running       INTEGER NOT NULL DEFAULT 1,
+    updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(task_id);
+
+CREATE TABLE IF NOT EXISTS entries (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    kind       TEXT    NOT NULL DEFAULT 'work',
+    started_at INTEGER NOT NULL,
+    ended_at   INTEGER,
+    note       TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_entries_task    ON entries(task_id);
+CREATE INDEX IF NOT EXISTS idx_entries_started ON entries(started_at);
+CREATE INDEX IF NOT EXISTS idx_entries_kind    ON entries(kind);
