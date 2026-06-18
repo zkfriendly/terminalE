@@ -64,6 +64,12 @@ func (s *Store) SetSessionNoteMeta(id int64, title, emoji string) (SessionNote, 
 	return s.GetSessionNote(id)
 }
 
+// DeleteSessionNote permanently removes a note.
+func (s *Store) DeleteSessionNote(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM session_notes WHERE id = ?`, id)
+	return err
+}
+
 // ListSessionNotes returns all notes for a session, newest first.
 func (s *Store) ListSessionNotes(sessionID int64) ([]SessionNote, error) {
 	rows, err := s.db.Query(

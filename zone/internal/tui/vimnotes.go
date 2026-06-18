@@ -45,6 +45,7 @@ func newVimNoteEditor(width, height int) vimNoteEditor {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
 	ta.Placeholder = "type i to insert · :wq to save & browse"
+	ta.Prompt = "  "
 	ta.SetWidth(width)
 	ta.SetHeight(height)
 	ta.Focus()

@@ -57,4 +57,19 @@ func TestSessionNotes(t *testing.T) {
 	if notes[1].Body != "revised thought" || notes[1].Title != "Revised" {
 		t.Fatalf("update not persisted: %+v", notes)
 	}
+
+	if err := s.DeleteSessionNote(notes[0].ID); err != nil {
+		t.Fatalf("delete note: %v", err)
+	}
+	notes, _ = s.ListSessionNotes(sess.ID)
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note after delete, got %d", len(notes))
+	}
+	if notes[0].Body != "revised thought" {
+		t.Fatalf("wrong note remained: %+v", notes[0])
+	}
+	summaries, _ = s.RecentSessions(5)
+	if len(summaries) != 1 || summaries[0].NoteCount != 1 {
+		t.Fatalf("expected note count 1 in summary, got %+v", summaries)
+	}
 }

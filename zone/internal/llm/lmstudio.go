@@ -55,13 +55,20 @@ var (
 
 // EnrichNote asks a local LM Studio server to suggest an emoji and short title.
 func EnrichNote(baseURL, model, body string) (NoteMeta, error) {
+	start := time.Now()
+	recordBegin()
+	fail := func(err error) (NoteMeta, error) {
+		recordFailure(time.Since(start))
+		return NoteMeta{}, err
+	}
+
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" {
-		return NoteMeta{}, fmt.Errorf("lm studio url is empty")
+		return fail(fmt.Errorf("lm studio url is empty"))
 	}
 	body = strings.TrimSpace(body)
 	if body == "" {
-		return NoteMeta{}, fmt.Errorf("note body is empty")
+		return fail(fmt.Errorf("note body is empty"))
 	}
 	if len(body) > 4000 {
 		body = body[:4000]
@@ -69,7 +76,7 @@ func EnrichNote(baseURL, model, body string) (NoteMeta, error) {
 
 	modelID, err := resolveModel(baseURL, model)
 	if err != nil {
-		return NoteMeta{}, err
+		return fail(err)
 	}
 
 	prompt := `Label this focus-session note. Reply with ONLY one JSON object on a single line.
@@ -88,30 +95,30 @@ Note:
 		MaxTokens:   2048,
 	})
 	if err != nil {
-		return NoteMeta{}, err
+		return fail(err)
 	}
 
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
-		return NoteMeta{}, err
+		return fail(err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return NoteMeta{}, err
+		return fail(err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return NoteMeta{}, fmt.Errorf("lm studio %d: %s", resp.StatusCode, trimErr(string(raw)))
+		return fail(fmt.Errorf("lm studio %d: %s", resp.StatusCode, trimErr(string(raw))))
 	}
 
 	var cr chatResponse
 	if err := json.Unmarshal(raw, &cr); err != nil {
-		return NoteMeta{}, err
+		return fail(err)
 	}
 	if len(cr.Choices) == 0 {
-		return NoteMeta{}, fmt.Errorf("lm studio: empty response")
+		return fail(fmt.Errorf("lm studio: empty response"))
 	}
 
 	msg := cr.Choices[0].Message
@@ -120,10 +127,15 @@ Note:
 		text = strings.TrimSpace(msg.ReasoningContent)
 	}
 	if text == "" {
-		return NoteMeta{}, fmt.Errorf("lm studio: model returned no text")
+		return fail(fmt.Errorf("lm studio: model returned no text"))
 	}
 
-	return parseNoteMeta(text)
+	meta, err := parseNoteMeta(text)
+	if err != nil {
+		return fail(err)
+	}
+	recordSuccess(time.Since(start))
+	return meta, nil
 }
 
 // resolveModel picks the configured model or auto-detects the first loaded

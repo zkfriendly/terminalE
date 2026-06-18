@@ -96,7 +96,11 @@ func RunDaemon(sessionID int64) error {
 	engine := timer.Restore(sess.WorkSec, sess.BreakSec, sess.TotalSec, sess.PrepareSec,
 		timer.PhaseFromString(rt.Phase), rt.Remaining, rt.Cycle, rt.Running)
 	fresh := rt.Remaining <= 0
+	// segCredited tracks how much of the current block is already recorded. When
+	// the engine is reset to a fresh start, nothing is credited yet.
+	segCredited := rt.SegCredited
 	if fresh {
+		segCredited = 0
 		// Fresh session: start running immediately.
 		engine.Start()
 	}
@@ -107,25 +111,21 @@ func RunDaemon(sessionID int64) error {
 	}
 
 	s := &server{
-		store:   st,
-		audio:   audio.New(cfg),
-		cfg:     cfg,
-		engine:  engine,
-		session: sess,
-		task:    task,
-		hasTask: hasTask,
-		accrued: rt.Accrued,
-		ln:      ln,
-		done:    make(chan struct{}),
+		store:       st,
+		audio:       audio.New(cfg),
+		cfg:         cfg,
+		engine:      engine,
+		session:     sess,
+		task:        task,
+		hasTask:     hasTask,
+		accrued:     rt.Accrued,
+		segCredited: segCredited,
+		ln:          ln,
+		done:        make(chan struct{}),
 	}
 
 	if s.engine.Running() && s.engine.Phase() == timer.Work {
 		s.audio.StartAmbient()
-	}
-	// On a brand-new session, demo the start/end chimes during the prepare block
-	// so the user knows what to listen for.
-	if fresh && s.engine.Phase() == timer.Prepare {
-		s.previewChimes()
 	}
 	s.persistRuntime()
 
@@ -324,11 +324,12 @@ func (s *server) endLocked() {
 // Caller holds the mutex.
 func (s *server) persistRuntime() {
 	_ = s.store.SaveRuntime(s.session.ID, store.Runtime{
-		Phase:     s.engine.Phase().String(),
-		Remaining: s.engine.Remaining(),
-		Cycle:     s.engine.CycleIndex(),
-		Accrued:   s.accrued,
-		Running:   s.engine.Running(),
+		Phase:       s.engine.Phase().String(),
+		Remaining:   s.engine.Remaining(),
+		Cycle:       s.engine.CycleIndex(),
+		Accrued:     s.accrued,
+		SegCredited: s.segCredited,
+		Running:     s.engine.Running(),
 	})
 }
 

@@ -115,7 +115,7 @@ func TestResumeEndedSession(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	// Persist some live state, then end it early (abandoned).
-	if err := s.SaveRuntime(sess.ID, Runtime{Phase: "work", Remaining: 1500, Cycle: 1, Accrued: 1500, Running: true}); err != nil {
+	if err := s.SaveRuntime(sess.ID, Runtime{Phase: "work", Remaining: 1500, Cycle: 1, Accrued: 1500, SegCredited: 1500, Running: true}); err != nil {
 		t.Fatalf("save runtime: %v", err)
 	}
 	if err := s.EndSession(sess.ID, SessionAbandoned); err != nil {
@@ -149,7 +149,7 @@ func TestResumeEndedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load runtime: %v", err)
 	}
-	if rt.Remaining != 1500 || rt.Accrued != 1500 || rt.Cycle != 1 {
+	if rt.Remaining != 1500 || rt.Accrued != 1500 || rt.Cycle != 1 || rt.SegCredited != 1500 {
 		t.Fatalf("runtime not preserved across reopen: %+v", rt)
 	}
 }

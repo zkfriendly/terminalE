@@ -233,16 +233,12 @@ func (d *dashboard) startInput(mode int, placeholder, initial string) tea.Cmd {
 
 func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
-	case "q":
-		return func() tea.Msg { return quitMsg{} }
-	case "s":
-		return func() tea.Msg { return gotoStatsMsg{} }
-	case "tab", "left", "right", "h", "l":
-		if d.pane == paneProjects {
-			d.pane = paneTasks
-		} else {
-			d.pane = paneProjects
-		}
+	case "tab":
+		return shellToggleFocusCmd()
+	case "left", "h":
+		d.pane = paneProjects
+	case "right", "l":
+		d.pane = paneTasks
 	case "up", "k":
 		d.move(-1)
 	case "down", "j":
@@ -273,8 +269,6 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 			d.toggleDone(t)
 		}
 	case "enter", "f", " ", "space":
-		// Resume a running background session if one exists. If the cursor is on
-		// a task, switch the running session over to it on resume.
 		if d.hasActive {
 			var task *store.Task
 			if d.pane == paneTasks {
@@ -288,8 +282,6 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 			d.pane = paneTasks
 			return nil
 		}
-		// Start a general focus session, defaulting the current task to the one
-		// under the cursor (if any). You can switch tasks during the session.
 		var task *store.Task
 		if t, ok := d.currentTask(); ok {
 			task = &t
@@ -378,66 +370,95 @@ func (d *dashboard) stopTracking() {
 	}
 }
 
-func (d *dashboard) render(width, height int) string {
+func (d *dashboard) renderBody(width, height int) string {
 	d.width, d.height = width, height
 	if width == 0 {
 		return "loading..."
 	}
 
-	header := d.styles.Title.Render("zone") + "  " +
-		d.styles.Dim.Render("local-first time tracking + focus")
+	var banners []string
 	if d.hasActive {
 		label := d.activeTask
 		if d.activeProj != "" {
 			label += " · " + d.activeProj
 		}
-		banner := d.styles.Work.Render("● focus session running") + " " +
-			d.styles.Dim.Render(label) + "  " +
-			d.styles.HelpKey.Render("enter") + " " + d.styles.Help.Render("resume")
-		header += "\n" + banner
+		banners = append(banners, d.styles.Work.Render("● focus session running")+" "+d.styles.Dim.Render(label))
 	} else if d.canResume {
 		label := d.resumeLabel
 		if d.resumeFocus > 0 {
 			label += "  " + d.styles.Dim.Render("("+formatDur(d.resumeFocus)+" focus)")
 		}
-		banner := d.styles.Break.Render("↻ last session ended early") + " " +
-			d.styles.Dim.Render(label) + "  " +
-			d.styles.HelpKey.Render("R") + " " + d.styles.Help.Render("resume") +
-			d.styles.Dim.Render("  ·  ") +
-			d.styles.HelpKey.Render("enter") + " " + d.styles.Help.Render("start new")
-		header += "\n" + banner
+		banners = append(banners, d.styles.Break.Render("↻ session ended early")+" "+d.styles.Dim.Render(label))
 	}
 
-	paneW := (width - 6) / 2
+	paneW := (width - 2) / 2
 	if paneW < 18 {
 		paneW = 18
 	}
 
-	// Render the footer first so the body can be sized around its actual height
-	// (the help bar may wrap to several lines on narrow terminals).
-	footer := d.renderFooter()
-	footerH := lipgloss.Height(footer)
-	headerH := lipgloss.Height(header)
-
-	// header + blank(1) + body(pane height + 2 border rows) + footer.
-	bodyH := height - headerH - 1 - footerH - 2
+	bannerH := 0
+	if len(banners) > 0 {
+		bannerH = len(banners)*2 - 1 + 1 // lines + trailing blank
+	}
+	bodyH := height - bannerH
 	if bodyH < 5 {
 		bodyH = 5
 	}
 
 	projects := d.renderProjects(paneW, bodyH)
 	tasks := d.renderTasks(paneW, bodyH)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, projects, " ", tasks)
+	divider := lipgloss.NewStyle().Foreground(colDim).Render("│")
+	body := lipgloss.JoinHorizontal(lipgloss.Top, projects, divider, tasks)
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
+	var parts []string
+	for _, b := range banners {
+		parts = append(parts, b)
+	}
+	if len(parts) > 0 {
+		parts = append(parts, "")
+	}
+	parts = append(parts, body)
+
+	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	if d.err != nil {
+		out = d.styles.Accent.Foreground(colRed).Render("error: "+d.err.Error()) + "\n" + out
+	}
+	return out
+}
+
+func (d *dashboard) actionHints() []string {
+	if d.mode != modeNormal {
+		return []string{
+			d.styles.helpEntry("enter", "save"),
+			d.styles.helpEntry("esc", "cancel"),
+		}
+	}
+	hints := []string{
+		d.styles.helpEntry("↑↓", "move"),
+		d.styles.helpEntry("←→", "pane"),
+		d.styles.helpEntry("enter/f", "focus"),
+		d.styles.helpEntry("t", "track"),
+		d.styles.helpEntry("n", "new"),
+		d.styles.helpEntry("e", "rename"),
+		d.styles.helpEntry("x", "done"),
+		d.styles.helpEntry("d", "archive"),
+	}
+	if d.canResume {
+		hints = append(hints, d.styles.helpEntry("R", "resume last"))
+	}
+	return hints
+}
+
+func (d *dashboard) infoHints() []string {
+	return nil
 }
 
 func (d *dashboard) renderProjects(w, h int) string {
-	title := d.styles.PaneTitle.Render("Projects")
+	title := d.renderPaneTitle("Projects", d.pane == paneProjects)
 	var lines []string
 	if len(d.projects) == 0 {
 		lines = append(lines, d.styles.Dim.Render("no projects yet"))
-		lines = append(lines, d.styles.Dim.Render("press n to add one"))
+		lines = append(lines, d.styles.Dim.Render("press n to create one"))
 	}
 	for i, p := range d.projects {
 		dot := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Color)).Render("●")
@@ -452,11 +473,7 @@ func (d *dashboard) renderProjects(w, h int) string {
 		lines = append(lines, "", d.input.View())
 	}
 	content := title + "\n\n" + strings.Join(lines, "\n")
-	style := d.styles.PaneInactive
-	if d.pane == paneProjects {
-		style = d.styles.PaneActive
-	}
-	return style.Width(w).Height(h).Render(content)
+	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
 }
 
 func (d *dashboard) renderTasks(w, h int) string {
@@ -464,7 +481,7 @@ func (d *dashboard) renderTasks(w, h int) string {
 	if p, ok := d.currentProject(); ok {
 		heading = "Tasks · " + p.Name
 	}
-	title := d.styles.PaneTitle.Render(heading)
+	title := d.renderPaneTitle(heading, d.pane == paneTasks)
 
 	var lines []string
 	if len(d.tasks) == 0 {
@@ -482,11 +499,14 @@ func (d *dashboard) renderTasks(w, h int) string {
 		lines = append(lines, "", d.input.View())
 	}
 	content := title + "\n\n" + strings.Join(lines, "\n")
-	style := d.styles.PaneInactive
-	if d.pane == paneTasks {
-		style = d.styles.PaneActive
+	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
+}
+
+func (d *dashboard) renderPaneTitle(label string, active bool) string {
+	if active {
+		return d.styles.PaneTitle.Render(label)
 	}
-	return style.Width(w).Height(h).Render(content)
+	return d.styles.Dim.Render(label)
 }
 
 func (d *dashboard) renderTaskLine(i int, t store.Task, w int) string {
@@ -522,39 +542,8 @@ func (d *dashboard) renderTaskLine(i int, t store.Task, w int) string {
 	return line + "  " + right
 }
 
-func (d *dashboard) renderFooter() string {
-	s := d.styles
-	var hints []string
-	if d.mode != modeNormal {
-		hints = []string{
-			s.helpEntry("enter", "save"),
-			s.helpEntry("esc", "cancel"),
-		}
-	} else {
-		hints = []string{
-			s.helpEntry("↑↓", "move"),
-			s.helpEntry("tab", "pane"),
-			s.helpEntry("enter/f", "focus zone"),
-			s.helpEntry("t", "track"),
-			s.helpEntry("n", "new"),
-			s.helpEntry("e", "rename"),
-			s.helpEntry("x", "done"),
-			s.helpEntry("d", "archive"),
-			s.helpEntry("s", "stats"),
-			s.helpEntry("q", "quit"),
-		}
-		if d.canResume {
-			hints = append(hints, s.helpEntry("R", "resume last"))
-		}
-	}
-	if d.tracking {
-		hints = append([]string{d.styles.Work.Render("tracking active")}, hints...)
-	}
-	help := wrapHints(hints, d.styles.Dim.Render("  ·  "), d.width)
-	if d.err != nil {
-		help = d.styles.Accent.Foreground(colRed).Render("error: "+d.err.Error()) + "\n" + help
-	}
-	return "\n" + help
+func (d *dashboard) escIsLocal() bool {
+	return d.mode != modeNormal
 }
 
 func clampInt(v, lo, hi int) int {

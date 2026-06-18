@@ -55,10 +55,8 @@ func (v *historyView) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		switch msg.String() {
-		case "esc":
-			return func() tea.Msg { return gotoStatsMsg{} }
-		case "q":
-			return func() tea.Msg { return gotoDashboardMsg{} }
+		case "tab":
+			return shellToggleFocusCmd()
 		case "up", "k":
 			v.cursor--
 		case "down", "j":
@@ -104,8 +102,8 @@ func (v *historyView) ensureCursorVisible() {
 
 // pageSize is the number of rows visible at once.
 func (v *historyView) pageSize() int {
-	// header(1) + blank(1) + column head(1) + blank(1) + footer(2) ~= 6 chrome rows.
-	n := v.height - 6
+	// header(1) + column head(1) = 2 chrome rows in body.
+	n := v.height - 2
 	if n < 1 {
 		n = 1
 	}
@@ -127,7 +125,7 @@ func (v *historyView) clampOffset() {
 	}
 }
 
-func (v *historyView) render(width, height int) string {
+func (v *historyView) renderBody(width, height int) string {
 	v.width, v.height = width, height
 	if width == 0 {
 		return "loading history..."
@@ -137,13 +135,8 @@ func (v *historyView) render(width, height int) string {
 	}
 	s := v.styles
 
-	header := s.Title.Render("zone · session history") + "  " +
-		s.Dim.Render(fmt.Sprintf("%d sessions", len(v.sessions)))
-
 	if len(v.sessions) == 0 {
-		body := s.Dim.Render("no sessions yet — press f on the dashboard to start one")
-		footer := "\n" + wrapHints([]string{s.helpEntry("esc", "back")}, s.Dim.Render("  ·  "), width)
-		return lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
+		return s.Dim.Render("no sessions yet") + "\n\n" + s.Dim.Render("start a focus session from Work (press f)")
 	}
 
 	colHead := s.Dim.Render(fmt.Sprintf("%-16s  %-26s  %-9s  %-9s  %-5s  %s",
@@ -160,27 +153,50 @@ func (v *historyView) render(width, height int) string {
 		rows = append(rows, v.row(ss, v.offset+i == v.cursor))
 	}
 
-	scroll := ""
-	if len(v.sessions) > page {
-		scroll = s.Dim.Render(fmt.Sprintf("  showing %d–%d of %d", v.offset+1, end, len(v.sessions)))
-	}
-
-	footer := "\n" + wrapHints([]string{
-		s.helpEntry("↑↓", "select"),
-		s.helpEntry("n", "view notes"),
-		s.helpEntry("g/G", "top/bottom"),
-		s.helpEntry("r", "refresh"),
-		s.helpEntry("esc", "stats"),
-		s.helpEntry("q", "dashboard"),
-	}, s.Dim.Render("  ·  "), width)
-
 	return lipgloss.JoinVertical(lipgloss.Left,
-		header+scroll,
-		"",
 		colHead,
 		strings.Join(rows, "\n"),
-		footer,
 	)
+}
+
+func (v *historyView) actionHints() []string {
+	if v.viewingNotes {
+		return []string{v.styles.helpEntry("esc", "close notes")}
+	}
+	return []string{
+		v.styles.helpEntry("↑↓", "move"),
+		v.styles.helpEntry("n", "view notes"),
+		v.styles.helpEntry("g/G", "top/bottom"),
+		v.styles.helpEntry("r", "refresh"),
+	}
+}
+
+func (v *historyView) infoHints() []string {
+	s := v.styles
+	if v.viewingNotes {
+		return []string{s.Dim.Render(fmt.Sprintf("%d notes", len(v.notes)))}
+	}
+	if len(v.sessions) == 0 {
+		return []string{s.Dim.Render("0 sessions")}
+	}
+	page := v.pageSize()
+	end := v.offset + page
+	if end > len(v.sessions) {
+		end = len(v.sessions)
+	}
+	info := s.Dim.Render(fmt.Sprintf("%d sessions", len(v.sessions)))
+	if len(v.sessions) > page {
+		info += s.Dim.Render(fmt.Sprintf("  ·  showing %d–%d", v.offset+1, end))
+	}
+	return []string{info}
+}
+
+func (v *historyView) escIsLocal() bool {
+	return v.viewingNotes
+}
+
+func (v *historyView) render(width, height int) string {
+	return v.renderBody(width, height)
 }
 
 func (v *historyView) row(ss store.SessionSummary, selected bool) string {

@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     cur_remaining INTEGER NOT NULL DEFAULT 0,
     cur_cycle     INTEGER NOT NULL DEFAULT 0,
     accrued_sec   INTEGER NOT NULL DEFAULT 0,
+    -- Seconds of the current work block already written as entries, so a restarted
+    -- daemon resumes crediting instead of re-recording the whole block.
+    seg_credited  INTEGER NOT NULL DEFAULT 0,
     running       INTEGER NOT NULL DEFAULT 1,
     updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );

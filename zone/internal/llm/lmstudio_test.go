@@ -8,6 +8,7 @@ import (
 
 func TestEnrichNote(t *testing.T) {
 	ResetModelCache()
+	ResetStats()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
@@ -28,6 +29,13 @@ func TestEnrichNote(t *testing.T) {
 	}
 	if meta.Emoji != "🧠" || meta.Title != "Deep refactor plan" {
 		t.Fatalf("unexpected meta: %+v", meta)
+	}
+	snap := Snapshot()
+	if snap.OK != 1 || snap.Err != 0 || snap.InFlight != 0 {
+		t.Fatalf("stats: %+v", snap)
+	}
+	if snap.LastMS <= 0 {
+		t.Fatalf("expected last duration, got %dms", snap.LastMS)
 	}
 }
 

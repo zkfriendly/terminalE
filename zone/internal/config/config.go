@@ -32,6 +32,10 @@ type Config struct {
 	LMStudioEnabled bool   `json:"lm_studio_enabled"`
 	LMStudioURL     string `json:"lm_studio_url"`
 	LMStudioModel   string `json:"lm_studio_model"` // empty = local-model
+
+	// ResumeNotesSessionID remembers which session had the notes browser open when
+	// the app quit, so re-attaching can restore that overlay.
+	ResumeNotesSessionID int64 `json:"resume_notes_session_id,omitempty"`
 }
 
 // Default returns a 3-min prepare + classic 50/10 over 4h session.
@@ -41,7 +45,7 @@ func Default() Config {
 		WorkMinutes:    50,
 		BreakMinutes:   10,
 		TotalMinutes:   240,
-		AmbientMode:    AmbientNoise,
+		AmbientMode:    AmbientOff,
 		AmbientFolder:  "",
 		Volume:         0.6,
 		ChimesEnabled:  true,
@@ -75,6 +79,11 @@ func path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
+// Path returns the absolute path to config.json.
+func Path() (string, error) {
+	return path()
+}
+
 // Load reads the config file, writing (and returning) defaults if absent.
 func Load() (Config, error) {
 	p, err := path()
@@ -99,7 +108,8 @@ func Load() (Config, error) {
 }
 
 // Save writes the config as pretty JSON.
-func (c Config) Save() error {
+func (c *Config) Save() error {
+	c.normalize()
 	p, err := path()
 	if err != nil {
 		return err
@@ -131,7 +141,7 @@ func (c *Config) normalize() {
 		c.Volume = 1
 	}
 	if c.AmbientMode == "" {
-		c.AmbientMode = AmbientNoise
+		c.AmbientMode = AmbientOff
 	}
 	if c.Layers == nil {
 		c.Layers = map[string]bool{"beat15": false, "beat45": false}

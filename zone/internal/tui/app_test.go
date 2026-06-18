@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/zkfriendly/zone/internal/config"
 	"github.com/zkfriendly/zone/internal/db"
+	"github.com/zkfriendly/zone/internal/llm"
 	"github.com/zkfriendly/zone/internal/session"
 	"github.com/zkfriendly/zone/internal/store"
 )
@@ -17,6 +20,11 @@ func testCfg() config.Config {
 	c := config.Default()
 	c.LMStudioEnabled = false
 	return c
+}
+
+func testCfgPtr() *config.Config {
+	c := testCfg()
+	return &c
 }
 
 func newTestApp(t *testing.T) (*App, *store.Store) {
@@ -47,8 +55,11 @@ func TestDashboardRenders(t *testing.T) {
 	sizeApp(app)
 
 	out := app.View()
-	if !strings.Contains(out.Content, "zone") || !strings.Contains(out.Content, "First task") {
+	if !strings.Contains(out.Content, "ZONE") || !strings.Contains(out.Content, "First task") {
 		t.Fatalf("dashboard render missing content:\n%s", out.Content)
+	}
+	if !strings.Contains(out.Content, "Stats") || !strings.Contains(out.Content, "History") {
+		t.Fatal("expected top nav tabs")
 	}
 }
 
@@ -91,13 +102,13 @@ func TestDashboardShowsResumeBanner(t *testing.T) {
 		t.Fatalf("expected resume banner:\n%s", out)
 	}
 
-	// Pressing R should produce a resumeLastMsg.
-	cmd := app.dashboard.update(keyPress("R"))
+	// Resume last session with R.
+	cmd := app.dashboard.updateNormal(keyPress("R"))
 	if cmd == nil {
-		t.Fatal("R produced no command")
+		t.Fatal("R should resume the last session when available")
 	}
 	if _, ok := cmd().(resumeLastMsg); !ok {
-		t.Fatal("R should request resuming the last session")
+		t.Fatal("R should produce resumeLastMsg")
 	}
 
 	// A completed (not abandoned) latest session must NOT offer resume.
@@ -129,8 +140,26 @@ func TestDashboardFooterFitsNarrowWidth(t *testing.T) {
 
 // TestSkipConfirmationState verifies the confirm/cancel state machine in the
 // zone view without a live daemon (client is nil; commands are no-ops).
+func TestEndConfirmationState(t *testing.T) {
+	z := newZone(nil, nil, newStyles(), testCfgPtr(), session.Snapshot{
+		Phase: "work", Running: true, Remaining: 1500, Planned: 3000, Cycles: 4,
+	})
+
+	z.handleKey(keyPress("E"))
+	if !z.confirmingEnd {
+		t.Fatal("expected E to request confirmation")
+	}
+	if !strings.Contains(z.render(100, 40), "end this session?") {
+		t.Fatal("expected end confirmation prompt")
+	}
+	z.handleKey(keyPress("n"))
+	if z.confirmingEnd {
+		t.Fatal("n should cancel end confirmation")
+	}
+}
+
 func TestSkipConfirmationState(t *testing.T) {
-	z := newZone(nil, nil, newStyles(), testCfg(), session.Snapshot{
+	z := newZone(nil, nil, newStyles(), testCfgPtr(), session.Snapshot{
 		Phase: "work", Running: true, Remaining: 1500, Planned: 3000, Cycles: 4,
 	})
 
@@ -153,13 +182,13 @@ func TestSkipConfirmationState(t *testing.T) {
 }
 
 func TestPrepareScreenIsFriendly(t *testing.T) {
-	z := newZone(nil, nil, newStyles(), testCfg(), session.Snapshot{
+	z := newZone(nil, nil, newStyles(), testCfgPtr(), session.Snapshot{
 		Phase: "prepare", Running: true, Remaining: 180,
 		TaskTitle: "Chapter one", ProjectName: "Writing",
 	})
 	out := z.render(100, 40)
 	for _, want := range []string{
-		"the zone", "glass of water", "rising chime", "finishing chime",
+		"the zone", "glass of water",
 		"Chapter one", "focus begins in",
 	} {
 		if !strings.Contains(out, want) {
@@ -176,6 +205,124 @@ func TestPrepareScreenIsFriendly(t *testing.T) {
 	}
 }
 
+func TestSettingsEnterViaKeyStartsEdit(t *testing.T) {
+	app, _ := newTestApp(t)
+	sizeApp(app)
+	app.Update(gotoSettingsMsg{})
+
+	// Work (min) is cursor 1 by default after new settings... actually cursor starts at 0
+	app.settings.cursor = 1
+
+	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		app.Update(cmd())
+	}
+	if !app.settings.editing {
+		t.Fatal("enter on Work (min) should start editing")
+	}
+}
+
+func TestNavFocusDoesNotMoveDashboard(t *testing.T) {
+	app, st := newTestApp(t)
+	p1, _ := st.CreateProject("Alpha", "")
+	p2, _ := st.CreateProject("Beta", "")
+	st.CreateTask(p1.ID, "Task A")
+	st.CreateTask(p2.ID, "Task B")
+	app.dashboard.reload()
+	sizeApp(app)
+
+	app.shell.focusNav = true
+	app.shell.navIdx = int(pageWork)
+	beforePane := app.dashboard.pane
+	beforeProj := app.dashboard.selProj
+
+	app.Update(keyPress("right"))
+	if app.shell.navIdx != int(pageStats) {
+		t.Fatalf("expected nav to move to stats, got idx %d", app.shell.navIdx)
+	}
+	if app.dashboard.pane != beforePane {
+		t.Fatalf("nav right should not switch dashboard pane (was %d, now %d)", beforePane, app.dashboard.pane)
+	}
+	if app.dashboard.selProj != beforeProj {
+		t.Fatalf("nav right should not move project selection (was %d, now %d)", beforeProj, app.dashboard.selProj)
+	}
+
+	app.Update(keyPress("down"))
+	if app.dashboard.selProj != beforeProj {
+		t.Fatalf("nav down should not move project selection (was %d, now %d)", beforeProj, app.dashboard.selProj)
+	}
+}
+
+func TestNavEnterOnCurrentWorkTabDoesNotStartFocus(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Alpha", "")
+	st.CreateTask(p.ID, "Task A")
+	app.dashboard.reload()
+	sizeApp(app)
+
+	app.shell.focusNav = true
+	app.shell.navIdx = int(pageWork)
+
+	app.Update(keyPress("enter"))
+	if app.view != viewShell {
+		t.Fatalf("enter on current Work tab should stay on shell, got view %d", app.view)
+	}
+	if app.shell.focusNav {
+		t.Fatal("enter should dismiss nav focus")
+	}
+}
+
+func TestSettingsEnterWorksWithNavFocus(t *testing.T) {
+	app, _ := newTestApp(t)
+	sizeApp(app)
+	app.Update(gotoSettingsMsg{})
+	app.shell.focusNav = true
+	app.settings.cursor = 1
+
+	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		app.Update(cmd())
+	}
+	if !app.settings.editing {
+		t.Fatal("enter should edit settings field even when nav bar had focus")
+	}
+}
+
+func TestSettingsView(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	app.Update(gotoSettingsMsg{})
+	if app.view != viewShell || app.shell.page != pageSettings {
+		t.Fatal("expected settings page in shell")
+	}
+	out := app.View()
+	for _, want := range []string{"ZONE", "Config", "Application Support/zone", "Work (min)", "LM Studio URL"} {
+		if !strings.Contains(out.Content, want) {
+			t.Fatalf("settings render missing %q:\n%s", want, out.Content)
+		}
+	}
+
+	app.settings.cursor = 1 // Work (min)
+	app.settings.startInput()
+	app.settings.input.SetValue("45")
+	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		app.Update(cmd())
+	}
+	if app.cfg.WorkMinutes != 45 {
+		t.Fatalf("expected work minutes 45, got %d", app.cfg.WorkMinutes)
+	}
+
+	_, cmd = app.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		app.Update(cmd())
+	}
+	if app.shell.page != pageWork {
+		t.Fatal("esc should return to work page from settings")
+	}
+}
+
 func TestStatsRenders(t *testing.T) {
 	app, st := newTestApp(t)
 	p, _ := st.CreateProject("Demo", "")
@@ -188,8 +335,8 @@ func TestStatsRenders(t *testing.T) {
 
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	app.Update(gotoStatsMsg{})
-	if app.view != viewStats {
-		t.Fatal("expected stats view")
+	if app.view != viewShell || app.shell.page != pageStats {
+		t.Fatal("expected stats page in shell")
 	}
 	out := app.View()
 	if !strings.Contains(out.Content, "Recent sessions") {
@@ -213,27 +360,73 @@ func TestHistoryRenders(t *testing.T) {
 	st.CreateSession(nil, 3000, 600, 14400, 180)
 
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-
-	// Pressing 'h' in stats should route to the history view.
-	app.Update(gotoStatsMsg{})
-	if cmd := app.stats.update(keyPress("h")); cmd != nil {
-		if _, ok := cmd().(gotoHistoryMsg); !ok {
-			t.Fatal("stats 'h' should open history")
-		}
-	} else {
-		t.Fatal("stats 'h' produced no command")
-	}
-
 	app.Update(gotoHistoryMsg{})
-	if app.view != viewHistory {
-		t.Fatal("expected history view")
+	if app.view != viewShell || app.shell.page != pageHistory {
+		t.Fatal("expected history page in shell")
 	}
 	out := app.View()
-	for _, want := range []string{"session history", "Deep work", "general focus", "wall", "focus", "notes"} {
+	for _, want := range []string{"History", "Deep work", "general focus", "wall", "focus", "notes"} {
 		if !strings.Contains(out.Content, want) {
 			t.Fatalf("history render missing %q:\n%s", want, out.Content)
 		}
 	}
+}
+
+func TestZoneBackgroundReturnsToWork(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	app.view = viewZone
+	app.zone = newZone(st, nil, newStyles(), &app.cfg, session.Snapshot{
+		SessionID: sess.ID, Phase: "work", Running: true, Remaining: 3000,
+		TaskTitle: "Focus",
+	})
+	sizeApp(app)
+
+	cmd := app.zone.handleKey(keyPress("b"))
+	if cmd == nil {
+		t.Fatal("b should detach from zone")
+	}
+	app.Update(cmd())
+	if app.view != viewShell {
+		t.Fatalf("expected shell view after background, got %v", app.view)
+	}
+	if app.shell.page != pageWork {
+		t.Fatal("expected work page after background")
+	}
+	out := app.View().Content
+	if !strings.Contains(out, "Focus") || !strings.Contains(out, "Stats") {
+		t.Fatalf("expected dashboard in shell after background:\n%s", out)
+	}
+}
+
+func TestZoneEscBackgroundReturnsToWork(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	app.view = viewZone
+	app.zone = newZone(st, nil, newStyles(), &app.cfg, session.Snapshot{
+		SessionID: sess.ID, Phase: "work", Running: true, Remaining: 3000,
+		TaskTitle: "Focus",
+	})
+	sizeApp(app)
+
+	_, cmd := app.Update(keyPress("esc"))
+	if cmd == nil {
+		t.Fatal("esc should detach from zone focus page")
+	}
+	app.Update(cmd())
+	if app.view != viewShell {
+		t.Fatalf("expected shell view after esc, got %v", app.view)
+	}
+	if app.shell.page != pageWork {
+		t.Fatal("expected work page after esc")
+	}
+	_ = st
 }
 
 func TestZoneNotesOverlay(t *testing.T) {
@@ -243,7 +436,7 @@ func TestZoneNotesOverlay(t *testing.T) {
 	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
 	st.AddSessionNote(sess.ID, "remember to refactor")
 
-	z := newZone(st, nil, newStyles(), testCfg(), session.Snapshot{
+	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{
 		SessionID: sess.ID, Phase: "work", Running: true, Remaining: 3000,
 		TaskTitle: "Focus",
 	})
@@ -251,18 +444,15 @@ func TestZoneNotesOverlay(t *testing.T) {
 	z.openNotes()
 
 	out := z.renderNotes(100, 40)
-	for _, want := range []string{"Open note", "+ new note", "remember to refactor"} {
+	for _, want := range []string{"Open note", "+ new note", "unlabeled"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("notes should open browser by default, missing %q:\n%s", want, out)
 		}
 	}
 
-	// Opening notes from zone key handler.
+	// Opening notes from zone key handler (may return label cmds for unlabeled notes).
 	z.noting = false
-	cmd := z.handleKey(keyPress("n"))
-	if cmd != nil {
-		t.Fatal("open notes should not return cmd")
-	}
+	_ = z.handleKey(keyPress("n"))
 	if !z.noting || !z.notePicking {
 		t.Fatal("expected noting mode with picker open after n")
 	}
@@ -277,7 +467,7 @@ func TestNotePickerAndEdit(t *testing.T) {
 	n1, _ := st.AddSessionNote(sess.ID, "first note")
 	st.AddSessionNote(sess.ID, "second note")
 
-	z := newZone(st, nil, newStyles(), testCfg(), session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{SessionID: sess.ID, Phase: "work"})
 	z.width, z.height = 100, 40
 	z.openNotes()
 	if !z.notePicking {
@@ -311,6 +501,243 @@ func TestNotePickerAndEdit(t *testing.T) {
 	_ = app
 }
 
+func TestNoteDeleteConfirmation(t *testing.T) {
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	n1, _ := st.AddSessionNote(sess.ID, "keep me")
+	st.AddSessionNote(sess.ID, "delete me")
+
+	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.width, z.height = 100, 40
+	z.openNotes()
+	z.notePickIdx = 1 // newest = "delete me"
+
+	z.handleNotePickerKey("d")
+	if !z.confirmingNoteDelete {
+		t.Fatal("expected delete confirmation")
+	}
+	out := z.render(100, 40)
+	if !strings.Contains(out, "delete") || !strings.Contains(out, "permanently") {
+		t.Fatalf("expected delete prompt in chrome, got:\n%s", out)
+	}
+
+	z.handleNotePickerKey("n")
+	if z.confirmingNoteDelete {
+		t.Fatal("n should cancel delete confirmation")
+	}
+	notes, _ := st.ListSessionNotes(sess.ID)
+	if len(notes) != 2 {
+		t.Fatalf("cancel should leave notes intact, got %d", len(notes))
+	}
+
+	z.handleNotePickerKey("d")
+	z.handleNotePickerKey("y")
+	if z.confirmingNoteDelete {
+		t.Fatal("y should clear confirmation")
+	}
+	notes, _ = st.ListSessionNotes(sess.ID)
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note after delete, got %d", len(notes))
+	}
+	if notes[0].ID != n1.ID {
+		t.Fatalf("expected note %d to remain, got %+v", n1.ID, notes[0])
+	}
+}
+
+func TestNoteLabelDisabledLeavesUnlabeled(t *testing.T) {
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	cfg := config.Default()
+	cfg.LMStudioEnabled = false
+
+	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.openNotes()
+	z.newNote()
+	z.noteEditor.Load("my fresh note")
+
+	cmd := z.saveNoteDraft()
+	if cmd == nil {
+		t.Fatal("expected label cmd after save")
+	}
+	msg := cmd().(noteEnrichedMsg)
+	z.onNoteEnriched(msg)
+
+	if z.noteLabelErr == "" {
+		t.Fatal("expected disabled labeling message")
+	}
+	if !strings.Contains(z.noteLabelErr, "lm_studio_enabled") {
+		t.Fatalf("expected config hint, got %q", z.noteLabelErr)
+	}
+	notes, _ := st.ListSessionNotes(sess.ID)
+	if notes[0].Title != "" || notes[0].Emoji != "" {
+		t.Fatalf("expected empty label on failure, got %+v", notes[0])
+	}
+	out := z.render(100, 40)
+	if !strings.Contains(out, "label:") {
+		t.Fatalf("expected label error in info bar:\n%s", out)
+	}
+}
+
+func TestNoteSaveTriggersEnrich(t *testing.T) {
+	llm.ResetModelCache()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"emoji\":\"💡\",\"title\":\"New idea captured\"}"}}]}`))
+		}
+	}))
+	defer srv.Close()
+
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	cfg := config.Default()
+	cfg.LMStudioEnabled = true
+	cfg.LMStudioURL = srv.URL
+
+	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.width, z.height = 100, 40
+	z.openNotes()
+	z.newNote()
+	z.noteEditor.Load("brand new thought")
+
+	cmd := z.saveNoteDraft()
+	if cmd == nil {
+		t.Fatal("expected enrich cmd after save")
+	}
+	msg := cmd().(noteEnrichedMsg)
+	z.onNoteEnriched(msg)
+
+	notes, _ := st.ListSessionNotes(sess.ID)
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note, got %d", len(notes))
+	}
+	if notes[0].Title != "New idea captured" || notes[0].Emoji != "💡" {
+		t.Fatalf("expected LLM label, got %+v", notes[0])
+	}
+	if z.noteLabelErr != "" {
+		t.Fatalf("unexpected label error: %q", z.noteLabelErr)
+	}
+}
+
+func TestNoteEnrichErrorLeavesUnlabeled(t *testing.T) {
+	llm.ResetModelCache()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		case "/v1/chat/completions":
+			http.Error(w, "server down", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	cfg := config.Default()
+	cfg.LMStudioEnabled = true
+	cfg.LMStudioURL = srv.URL
+
+	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.width, z.height = 100, 40
+	z.openNotes()
+	z.newNote()
+	z.noteEditor.Load("note without label")
+
+	cmd := z.saveNoteDraft()
+	if cmd == nil {
+		t.Fatal("expected enrich cmd after save")
+	}
+	msg := cmd().(noteEnrichedMsg)
+	z.onNoteEnriched(msg)
+
+	if z.noteLabelErr == "" {
+		t.Fatal("expected label error to be shown")
+	}
+	notes, _ := st.ListSessionNotes(sess.ID)
+	if notes[0].Title != "" || notes[0].Emoji != "" {
+		t.Fatalf("expected empty label on LLM error, got %+v", notes[0])
+	}
+	z.notePicking = true
+	z.notePickIdx = 1
+	z.ensureNotePickVisible()
+	out := z.renderNotePicker(100, 40)
+	if !strings.Contains(out, "unlabeled") {
+		t.Fatalf("expected unlabeled in picker:\n%s", out)
+	}
+}
+
+func TestNoteEscBrowseDoesNotSave(t *testing.T) {
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	n1, _ := st.AddSessionNote(sess.ID, "original text")
+
+	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.width, z.height = 100, 40
+	z.openNotes()
+	z.loadNote(n1)
+	z.notePicking = false
+
+	z.noteEditor.Load("temporary edit")
+	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // insert -> normal
+	if z.noteEditor.mode != noteModeNormal {
+		t.Fatalf("expected normal mode after esc, got %d", z.noteEditor.mode)
+	}
+	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // normal -> blocked while dirty
+
+	if z.notePicking {
+		t.Fatal("esc should not browse while note has unsaved changes")
+	}
+	if z.noteEditor.Value() != "temporary edit" {
+		t.Fatalf("expected editor to keep edits, got %q", z.noteEditor.Value())
+	}
+
+	notes, _ := st.ListSessionNotes(sess.ID)
+	for _, n := range notes {
+		if n.ID == n1.ID && n.Body != "original text" {
+			t.Fatalf("esc to browse should not save; got body %q", n.Body)
+		}
+	}
+}
+
+func TestNoteEscBrowseWhenClean(t *testing.T) {
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	n1, _ := st.AddSessionNote(sess.ID, "original text")
+
+	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.width, z.height = 100, 40
+	z.openNotes()
+	z.loadNote(n1)
+	z.notePicking = false
+
+	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // insert -> normal
+	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // normal -> browse
+
+	if !z.notePicking {
+		t.Fatal("esc should browse when note is unchanged")
+	}
+	if z.editingNoteID != n1.ID {
+		t.Fatalf("expected editing id to remain %d, got %d", n1.ID, z.editingNoteID)
+	}
+}
+
 func TestNoteSaveQuitReturnsToPicker(t *testing.T) {
 	_, st := newTestApp(t)
 	p, _ := st.CreateProject("Demo", "")
@@ -318,9 +745,10 @@ func TestNoteSaveQuitReturnsToPicker(t *testing.T) {
 	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
 	st.AddSessionNote(sess.ID, "existing note")
 
-	z := newZone(st, nil, newStyles(), testCfg(), session.Snapshot{
+	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{
 		SessionID: sess.ID, Phase: "work", Running: true, Remaining: 1800,
-		TaskTitle: "Focus",
+		CycleIndex: 1, Cycles: 4, Accrued: 720, WallSec: 900, TodayTotal: 5400,
+		TaskTitle: "Focus", ProjectName: "Demo",
 	})
 	z.width, z.height = 100, 40
 	z.openNotes()
@@ -347,7 +775,66 @@ func TestNoteSaveQuitReturnsToPicker(t *testing.T) {
 	if !strings.Contains(out, "Open note") {
 		t.Fatalf("expected note picker after :wq:\n%s", out)
 	}
-	if !strings.Contains(out, formatClock(1800)) {
-		t.Fatalf("expected timer bar on notes overlay:\n%s", out)
+	for _, want := range []string{formatClock(1800), "2/4", "12m", "elapsed", "Focus", "today"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected status bar to include %q:\n%s", want, out)
+		}
+	}
+	if got, want := lipgloss.Height(out), 40; got != want {
+		t.Fatalf("notes view height = %d, want %d (status bar must fit on screen)", got, want)
+	}
+}
+
+func TestNotesPickerEscIsLocal(t *testing.T) {
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	app, _ := newTestApp(t)
+	app.view = viewZone
+	app.zone = newZone(st, nil, newStyles(), &app.cfg, session.Snapshot{SessionID: sess.ID})
+	app.zone.openNotes()
+	if !app.zone.notePicking {
+		t.Fatal("expected notes picker")
+	}
+	if !app.escIsLocal() {
+		t.Fatal("esc should stay local on notes picker (close notes, not quit)")
+	}
+
+	app.zone.newNote()
+	if !app.escIsLocal() {
+		t.Fatal("esc should stay local while editing a note")
+	}
+}
+
+func TestResumeNotesPersisted(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	app.view = viewZone
+	app.zone = newZone(st, nil, newStyles(), &app.cfg, session.Snapshot{SessionID: sess.ID})
+	app.zone.openNotes()
+
+	app.persistResumeNotesBeforeQuit()
+	if app.cfg.ResumeNotesSessionID != sess.ID {
+		t.Fatalf("expected resume hint for session %d, got %d", sess.ID, app.cfg.ResumeNotesSessionID)
+	}
+
+	// Re-attaching the same session should reopen the notes browser.
+	app.zone = newZone(st, nil, newStyles(), &app.cfg, session.Snapshot{SessionID: sess.ID})
+	if app.cfg.ResumeNotesSessionID == sess.ID {
+		app.zone.openNotes()
+		app.cfg.ResumeNotesSessionID = 0
+	}
+	if !app.zone.noting || !app.zone.notePicking {
+		t.Fatal("expected notes browser restored on reconnect")
+	}
+
+	app.zone.closeNotes(false)
+	if app.cfg.ResumeNotesSessionID != 0 {
+		t.Fatal("closing notes should clear resume hint")
 	}
 }

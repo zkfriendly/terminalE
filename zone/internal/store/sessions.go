@@ -57,7 +57,12 @@ type Runtime struct {
 	Remaining int
 	Cycle     int
 	Accrued   int
-	Running   bool
+	// SegCredited is how many seconds of the current work block have already been
+	// written as entries. Persisting it lets a restarted daemon resume crediting
+	// from where it left off instead of re-recording the whole block (which would
+	// create overlapping entries and inflate focus time).
+	SegCredited int
+	Running     bool
 }
 
 // ActiveSession returns the most recent session whose status is still active.
@@ -115,9 +120,10 @@ func (s *Store) ReopenSession(id int64) error {
 func (s *Store) SaveRuntime(id int64, rt Runtime) error {
 	_, err := s.db.Exec(`
 		UPDATE sessions
-		SET cur_phase = ?, cur_remaining = ?, cur_cycle = ?, accrued_sec = ?, running = ?, updated_at = ?
+		SET cur_phase = ?, cur_remaining = ?, cur_cycle = ?, accrued_sec = ?,
+		    seg_credited = ?, running = ?, updated_at = ?
 		WHERE id = ?`,
-		rt.Phase, rt.Remaining, rt.Cycle, rt.Accrued, rt.Running, time.Now().Unix(), id,
+		rt.Phase, rt.Remaining, rt.Cycle, rt.Accrued, rt.SegCredited, rt.Running, time.Now().Unix(), id,
 	)
 	return err
 }
@@ -126,8 +132,9 @@ func (s *Store) SaveRuntime(id int64, rt Runtime) error {
 func (s *Store) LoadRuntime(id int64) (Runtime, error) {
 	var rt Runtime
 	err := s.db.QueryRow(
-		`SELECT cur_phase, cur_remaining, cur_cycle, accrued_sec, running FROM sessions WHERE id = ?`, id,
-	).Scan(&rt.Phase, &rt.Remaining, &rt.Cycle, &rt.Accrued, &rt.Running)
+		`SELECT cur_phase, cur_remaining, cur_cycle, accrued_sec, seg_credited, running
+		 FROM sessions WHERE id = ?`, id,
+	).Scan(&rt.Phase, &rt.Remaining, &rt.Cycle, &rt.Accrued, &rt.SegCredited, &rt.Running)
 	return rt, err
 }
 

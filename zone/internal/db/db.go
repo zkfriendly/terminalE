@@ -65,6 +65,7 @@ func migrate(database *sql.DB) error {
 		`ALTER TABLE sessions ADD COLUMN cur_remaining INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN cur_cycle INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN accrued_sec INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN seg_credited INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN running INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE sessions ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE session_notes ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
@@ -116,13 +117,14 @@ func makeSessionTaskNullable(database *sql.DB) error {
 			cur_remaining INTEGER NOT NULL DEFAULT 0,
 			cur_cycle     INTEGER NOT NULL DEFAULT 0,
 			accrued_sec   INTEGER NOT NULL DEFAULT 0,
+			seg_credited  INTEGER NOT NULL DEFAULT 0,
 			running       INTEGER NOT NULL DEFAULT 1,
 			updated_at    INTEGER NOT NULL DEFAULT 0
 		)`,
 		`INSERT INTO sessions_new
 			SELECT id, task_id, work_sec, break_sec, total_sec, prepare_sec,
 			       started_at, ended_at, status, cur_phase, cur_remaining,
-			       cur_cycle, accrued_sec, running, updated_at
+			       cur_cycle, accrued_sec, seg_credited, running, updated_at
 			FROM sessions`,
 		`DROP TABLE sessions`,
 		`ALTER TABLE sessions_new RENAME TO sessions`,

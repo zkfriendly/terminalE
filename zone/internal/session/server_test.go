@@ -227,6 +227,63 @@ func TestDaemonResumesPersistedState(t *testing.T) {
 	}
 }
 
+// TestDaemonRestartDoesNotDoubleCount guards against the bug where a daemon
+// restarting mid-work-block re-recorded the whole block as a fresh overlapping
+// entry (because segCredited was not persisted), inflating focus time well past
+// the wall-clock time actually spent.
+func TestDaemonRestartDoesNotDoubleCount(t *testing.T) {
+	st := isolate(t)
+	p, _ := st.CreateProject("Code", "")
+	task, _ := st.CreateTask(p.ID, "Long focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 0)
+
+	// A previous daemon already credited 1500s of the current work block and
+	// persisted that progress (accrued + seg_credited), then stopped.
+	now := time.Now()
+	if _, err := st.AddEntry(task.ID, &sess.ID, store.KindWork, now.Add(-1500*time.Second), now); err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	if err := st.SaveRuntime(sess.ID, store.Runtime{
+		Phase: "work", Remaining: 1500, Cycle: 0, Accrued: 1500, SegCredited: 1500, Running: true,
+	}); err != nil {
+		t.Fatalf("save runtime: %v", err)
+	}
+
+	daemonErr := make(chan error, 1)
+	go func() { daemonErr <- RunDaemon(sess.ID) }()
+	t.Cleanup(func() { <-daemonErr })
+	if !waitFor(IsAlive, 3*time.Second) {
+		t.Fatal("daemon did not start")
+	}
+	client, err := Dial()
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	// Resume should carry forward the already-credited focus time.
+	snap, _ := client.Status()
+	if snap.Accrued != 1500 {
+		t.Fatalf("expected resumed accrued 1500, got %d", snap.Accrued)
+	}
+
+	// Let it run a moment, then end. Ending must credit only the genuinely new
+	// seconds, not re-record the 1500s the prior daemon already wrote.
+	time.Sleep(1200 * time.Millisecond)
+	_, _ = client.End()
+	client.Close()
+	if !waitFor(func() bool { return !IsAlive() }, 3*time.Second) {
+		t.Fatal("daemon did not shut down")
+	}
+
+	ws, _ := st.TaskWorkSeconds()
+	if ws[task.ID] < 1500 {
+		t.Fatalf("expected at least the prior 1500s, got %d", ws[task.ID])
+	}
+	if ws[task.ID] > 1600 {
+		t.Fatalf("focus time double-counted across restart: got %d (want ~1500)", ws[task.ID])
+	}
+}
+
 func TestDaemonResumesAbandonedSession(t *testing.T) {
 	st := isolate(t)
 	p, _ := st.CreateProject("Code", "")

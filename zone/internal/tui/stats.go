@@ -51,10 +51,8 @@ func (v *statsView) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
-		case "esc", "q":
-			return func() tea.Msg { return gotoDashboardMsg{} }
-		case "h":
-			return func() tea.Msg { return gotoHistoryMsg{} }
+		case "tab":
+			return shellToggleFocusCmd()
 		case "r":
 			v.reload()
 		}
@@ -62,14 +60,12 @@ func (v *statsView) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (v *statsView) render(width, height int) string {
+func (v *statsView) renderBody(width, height int) string {
 	v.width, v.height = width, height
 	if width == 0 {
 		return "loading stats..."
 	}
 	s := v.styles
-
-	header := s.Title.Render("zone · stats")
 
 	cards := lipgloss.JoinHorizontal(lipgloss.Top,
 		v.statCard("today", formatDur(v.today)),
@@ -105,15 +101,24 @@ func (v *statsView) render(width, height int) string {
 		v.renderSessions(),
 	)
 
-	footer := "\n" + wrapHints([]string{
-		s.helpEntry("h", "full history"),
-		s.helpEntry("r", "refresh"),
-		s.helpEntry("esc", "back"),
-	}, s.Dim.Render("  ·  "), width)
+	return lipgloss.JoinVertical(lipgloss.Left, cards, "", cols, "", history)
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		header, "", cards, "", cols, "", history, footer,
-	)
+func (v *statsView) actionHints() []string {
+	return []string{v.styles.helpEntry("r", "refresh")}
+}
+
+func (v *statsView) infoHints() []string {
+	s := v.styles
+	return []string{
+		s.StatLabel.Render("today") + " " + s.StatValue.Render(formatDur(v.today)),
+		s.StatLabel.Render("7d") + " " + s.StatValue.Render(formatDur(v.week)),
+		s.StatLabel.Render("streak") + " " + s.StatValue.Render(fmt.Sprintf("%d days", v.streak)),
+	}
+}
+
+func (v *statsView) render(width, height int) string {
+	return v.renderBody(width, height)
 }
 
 func (v *statsView) statCard(label, value string) string {
