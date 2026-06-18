@@ -52,6 +52,11 @@ type dashboard struct {
 	activeTask string
 	activeProj string
 
+	// Most recent session that was ended early and can be resumed, if any.
+	canResume   bool
+	resumeLabel string
+	resumeFocus int
+
 	now time.Time
 	err error
 }
@@ -87,10 +92,35 @@ func (d *dashboard) reload() {
 	}
 	d.hasActive = false
 	if sess, ok, err := d.store.ActiveSession(); err == nil && ok {
-		if task, err := d.store.GetTask(sess.TaskID); err == nil {
-			d.hasActive = true
-			d.activeTask = task.Title
-			d.activeProj = task.ProjectName
+		d.hasActive = true
+		d.activeTask = "general focus"
+		d.activeProj = ""
+		if sess.TaskID != nil {
+			if task, err := d.store.GetTask(*sess.TaskID); err == nil {
+				d.activeTask = task.Title
+				d.activeProj = task.ProjectName
+			}
+		}
+	}
+
+	// Offer to resume the last session only if it was ended early (abandoned)
+	// and there isn't already one running.
+	d.canResume = false
+	if !d.hasActive {
+		if sess, ok, err := d.store.LastEndedSession(); err == nil && ok && sess.Status == store.SessionAbandoned {
+			d.canResume = true
+			d.resumeLabel = "general focus"
+			if sess.TaskID != nil {
+				if task, err := d.store.GetTask(*sess.TaskID); err == nil {
+					d.resumeLabel = task.Title
+					if task.ProjectName != "" {
+						d.resumeLabel += " · " + task.ProjectName
+					}
+				}
+			}
+			if rt, err := d.store.LoadRuntime(sess.ID); err == nil {
+				d.resumeFocus = rt.Accrued
+			}
 		}
 	}
 }
@@ -243,17 +273,31 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 			d.toggleDone(t)
 		}
 	case "enter", "f", " ", "space":
-		// Resume a running background session if one exists.
+		// Resume a running background session if one exists. If the cursor is on
+		// a task, switch the running session over to it on resume.
 		if d.hasActive {
-			return func() tea.Msg { return resumeSessionMsg{} }
+			var task *store.Task
+			if d.pane == paneTasks {
+				if t, ok := d.currentTask(); ok {
+					task = &t
+				}
+			}
+			return func() tea.Msg { return resumeSessionMsg{task: task} }
 		}
 		if d.pane == paneProjects && msg.String() != "f" {
 			d.pane = paneTasks
 			return nil
 		}
+		// Start a general focus session, defaulting the current task to the one
+		// under the cursor (if any). You can switch tasks during the session.
+		var task *store.Task
 		if t, ok := d.currentTask(); ok {
-			task := t
-			return func() tea.Msg { return startSessionMsg{task: task} }
+			task = &t
+		}
+		return func() tea.Msg { return startSessionMsg{task: task} }
+	case "R":
+		if d.canResume {
+			return func() tea.Msg { return resumeLastMsg{} }
 		}
 	case "r":
 		d.reload()
@@ -343,9 +387,24 @@ func (d *dashboard) render(width, height int) string {
 	header := d.styles.Title.Render("zone") + "  " +
 		d.styles.Dim.Render("local-first time tracking + focus")
 	if d.hasActive {
+		label := d.activeTask
+		if d.activeProj != "" {
+			label += " · " + d.activeProj
+		}
 		banner := d.styles.Work.Render("● focus session running") + " " +
-			d.styles.Dim.Render(d.activeTask+" · "+d.activeProj) + "  " +
+			d.styles.Dim.Render(label) + "  " +
 			d.styles.HelpKey.Render("enter") + " " + d.styles.Help.Render("resume")
+		header += "\n" + banner
+	} else if d.canResume {
+		label := d.resumeLabel
+		if d.resumeFocus > 0 {
+			label += "  " + d.styles.Dim.Render("("+formatDur(d.resumeFocus)+" focus)")
+		}
+		banner := d.styles.Break.Render("↻ last session ended early") + " " +
+			d.styles.Dim.Render(label) + "  " +
+			d.styles.HelpKey.Render("R") + " " + d.styles.Help.Render("resume") +
+			d.styles.Dim.Render("  ·  ") +
+			d.styles.HelpKey.Render("enter") + " " + d.styles.Help.Render("start new")
 		header += "\n" + banner
 	}
 
@@ -483,6 +542,9 @@ func (d *dashboard) renderFooter() string {
 			s.helpEntry("d", "archive"),
 			s.helpEntry("s", "stats"),
 			s.helpEntry("q", "quit"),
+		}
+		if d.canResume {
+			hints = append(hints, s.helpEntry("R", "resume last"))
 		}
 	}
 	if d.tracking {

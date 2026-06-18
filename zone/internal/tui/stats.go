@@ -53,6 +53,8 @@ func (v *statsView) update(msg tea.Msg) tea.Cmd {
 		switch msg.String() {
 		case "esc", "q":
 			return func() tea.Msg { return gotoDashboardMsg{} }
+		case "h":
+			return func() tea.Msg { return gotoHistoryMsg{} }
 		case "r":
 			v.reload()
 		}
@@ -104,6 +106,7 @@ func (v *statsView) render(width, height int) string {
 	)
 
 	footer := "\n" + wrapHints([]string{
+		s.helpEntry("h", "full history"),
 		s.helpEntry("r", "refresh"),
 		s.helpEntry("esc", "back"),
 	}, s.Dim.Render("  ·  "), width)
@@ -173,15 +176,25 @@ func (v *statsView) renderSessions() string {
 	for _, ss := range v.sessions {
 		when := ss.StartedAt.Format("Mon 15:04")
 		status := statusBadge(s, ss.Status)
-		dot := lipgloss.NewStyle().Foreground(lipgloss.Color(ss.ProjectColor)).Render("●")
-		line := fmt.Sprintf("%s  %s %s · %s  %s  %s",
+
+		// A session may have no current task (general focus) or span several.
+		var label string
+		if ss.TaskTitle == "" {
+			label = s.Dim.Render("general focus")
+		} else {
+			dot := lipgloss.NewStyle().Foreground(lipgloss.Color(ss.ProjectColor)).Render("●")
+			label = dot + " " + truncate(ss.TaskTitle, 20) + " · " + s.Dim.Render(truncate(ss.ProjectName, 14))
+		}
+		line := fmt.Sprintf("%s  %s  %s %s  %s",
 			s.Dim.Render(when),
-			dot,
-			truncate(ss.TaskTitle, 20),
-			s.Dim.Render(truncate(ss.ProjectName, 14)),
+			label,
 			s.StatValue.Render(formatDur(ss.WorkedSec)),
+			s.Dim.Render("("+formatDur(ss.WallSec)+" wall)"),
 			status,
 		)
+		if ss.NoteCount > 0 {
+			line += "  " + s.Dim.Render(fmt.Sprintf("%d notes", ss.NoteCount))
+		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")

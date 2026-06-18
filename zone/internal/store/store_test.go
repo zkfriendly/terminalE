@@ -55,7 +55,7 @@ func TestEntriesAndStats(t *testing.T) {
 	p, _ := s.CreateProject("Code", "#fff")
 	task, _ := s.CreateTask(p.ID, "Refactor")
 
-	sess, err := s.CreateSession(task.ID, 3000, 600, 14400, 180)
+	sess, err := s.CreateSession(&task.ID, 3000, 600, 14400, 180)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -94,6 +94,63 @@ func TestEntriesAndStats(t *testing.T) {
 	}
 	if sessions[0].WorkedSec != 3000 {
 		t.Fatalf("expected worked 3000 in summary, got %d", sessions[0].WorkedSec)
+	}
+	// Wall time spans from session start to end (here ~0s since the test runs
+	// within a second); it must at least be populated and non-negative.
+	if sessions[0].WallSec < 0 {
+		t.Fatalf("expected non-negative wall, got %d", sessions[0].WallSec)
+	}
+}
+
+func TestResumeEndedSession(t *testing.T) {
+	s := newTestStore(t)
+
+	// No ended sessions yet.
+	if _, ok, err := s.LastEndedSession(); err != nil || ok {
+		t.Fatalf("expected no ended session, got ok=%v err=%v", ok, err)
+	}
+
+	sess, err := s.CreateSession(nil, 3000, 600, 14400, 180)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// Persist some live state, then end it early (abandoned).
+	if err := s.SaveRuntime(sess.ID, Runtime{Phase: "work", Remaining: 1500, Cycle: 1, Accrued: 1500, Running: true}); err != nil {
+		t.Fatalf("save runtime: %v", err)
+	}
+	if err := s.EndSession(sess.ID, SessionAbandoned); err != nil {
+		t.Fatalf("end session: %v", err)
+	}
+
+	// It must no longer count as active, but should be the last ended session.
+	if _, ok, _ := s.ActiveSession(); ok {
+		t.Fatal("ended session should not be active")
+	}
+	last, ok, err := s.LastEndedSession()
+	if err != nil || !ok {
+		t.Fatalf("expected last ended session, ok=%v err=%v", ok, err)
+	}
+	if last.ID != sess.ID || last.Status != SessionAbandoned {
+		t.Fatalf("unexpected last ended session: %+v", last)
+	}
+
+	// Reopening makes it active again with no end time, runtime preserved.
+	if err := s.ReopenSession(sess.ID); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	active, ok, err := s.ActiveSession()
+	if err != nil || !ok || active.ID != sess.ID {
+		t.Fatalf("expected reopened session active, got ok=%v err=%v", ok, err)
+	}
+	if active.EndedAt != nil {
+		t.Fatal("reopened session should have no end time")
+	}
+	rt, err := s.LoadRuntime(sess.ID)
+	if err != nil {
+		t.Fatalf("load runtime: %v", err)
+	}
+	if rt.Remaining != 1500 || rt.Accrued != 1500 || rt.Cycle != 1 {
+		t.Fatalf("runtime not preserved across reopen: %+v", rt)
 	}
 }
 

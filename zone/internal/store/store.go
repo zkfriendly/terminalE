@@ -36,10 +36,12 @@ type Task struct {
 	ProjectName string // populated by joins where convenient
 }
 
-// Session is a pomodoro focus session targeting a task.
+// Session is a general pomodoro focus session. TaskID is the *current* task the
+// user is working on (nil = no task / just focus); it can change during the
+// session, and time is attributed to whichever task is current at the time.
 type Session struct {
 	ID         int64
-	TaskID     int64
+	TaskID     *int64
 	WorkSec    int
 	BreakSec   int
 	TotalSec   int

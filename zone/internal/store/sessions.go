@@ -12,8 +12,9 @@ const (
 	SessionAbandoned = "abandoned"
 )
 
-// CreateSession opens a new focus session for a task.
-func (s *Store) CreateSession(taskID int64, workSec, breakSec, totalSec, prepareSec int) (Session, error) {
+// CreateSession opens a new general focus session. taskID is the optional
+// starting "current" task (nil = start with no task).
+func (s *Store) CreateSession(taskID *int64, workSec, breakSec, totalSec, prepareSec int) (Session, error) {
 	res, err := s.db.Exec(
 		`INSERT INTO sessions (task_id, work_sec, break_sec, total_sec, prepare_sec, status, cur_phase, cur_remaining)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -26,18 +27,25 @@ func (s *Store) CreateSession(taskID int64, workSec, breakSec, totalSec, prepare
 	return s.GetSession(id)
 }
 
+// SetSessionTask changes a session's current task (nil clears it).
+func (s *Store) SetSessionTask(id int64, taskID *int64) error {
+	_, err := s.db.Exec(`UPDATE sessions SET task_id = ? WHERE id = ?`, taskID, id)
+	return err
+}
+
 // GetSession fetches a session by id.
 func (s *Store) GetSession(id int64) (Session, error) {
 	var sess Session
 	var started int64
-	var ended sql.NullInt64
+	var ended, taskID sql.NullInt64
 	err := s.db.QueryRow(`
 		SELECT id, task_id, work_sec, break_sec, total_sec, prepare_sec, started_at, ended_at, status
 		FROM sessions WHERE id = ?`, id,
-	).Scan(&sess.ID, &sess.TaskID, &sess.WorkSec, &sess.BreakSec, &sess.TotalSec, &sess.PrepareSec, &started, &ended, &sess.Status)
+	).Scan(&sess.ID, &taskID, &sess.WorkSec, &sess.BreakSec, &sess.TotalSec, &sess.PrepareSec, &started, &ended, &sess.Status)
 	if err != nil {
 		return Session{}, err
 	}
+	sess.TaskID = toInt64Ptr(taskID)
 	sess.StartedAt = toTime(started)
 	sess.EndedAt = toTimePtr(ended)
 	return sess, nil
@@ -70,6 +78,37 @@ func (s *Store) ActiveSession() (Session, bool, error) {
 		return Session{}, false, err
 	}
 	return sess, true, nil
+}
+
+// LastEndedSession returns the most recently ended (non-active) session, if any.
+// Useful for offering to resume a session that was ended early.
+func (s *Store) LastEndedSession() (Session, bool, error) {
+	var id int64
+	err := s.db.QueryRow(
+		`SELECT id FROM sessions WHERE status != ? ORDER BY started_at DESC LIMIT 1`,
+		SessionActive,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return Session{}, false, nil
+	}
+	if err != nil {
+		return Session{}, false, err
+	}
+	sess, err := s.GetSession(id)
+	if err != nil {
+		return Session{}, false, err
+	}
+	return sess, true, nil
+}
+
+// ReopenSession marks a previously ended session active again and clears its end
+// time, so the daemon can resume it from its persisted runtime.
+func (s *Store) ReopenSession(id int64) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET status = ?, ended_at = NULL WHERE id = ?`,
+		SessionActive, id,
+	)
+	return err
 }
 
 // SaveRuntime persists the live engine state for a session.
@@ -105,12 +144,14 @@ func (s *Store) EndSession(id int64, status string) error {
 func (s *Store) RecentSessions(limit int) ([]SessionSummary, error) {
 	rows, err := s.db.Query(`
 		SELECT s.id, s.started_at, s.ended_at, s.status, s.work_sec, s.break_sec, s.total_sec,
-		       t.title, p.name, p.color,
+		       COALESCE(t.title, ''), COALESCE(p.name, ''), COALESCE(p.color, ''),
 		       COALESCE((SELECT SUM(e.ended_at - e.started_at) FROM entries e
-		                 WHERE e.session_id = s.id AND e.kind = 'work' AND e.ended_at IS NOT NULL), 0)
+		                 WHERE e.session_id = s.id AND e.kind = 'work' AND e.ended_at IS NOT NULL), 0),
+		       COALESCE(s.ended_at, strftime('%s','now')) - s.started_at,
+		       COALESCE((SELECT COUNT(*) FROM session_notes sn WHERE sn.session_id = s.id), 0)
 		FROM sessions s
-		JOIN tasks t    ON t.id = s.task_id
-		JOIN projects p ON p.id = t.project_id
+		LEFT JOIN tasks t    ON t.id = s.task_id
+		LEFT JOIN projects p ON p.id = t.project_id
 		ORDER BY s.started_at DESC
 		LIMIT ?`, limit)
 	if err != nil {
@@ -125,7 +166,7 @@ func (s *Store) RecentSessions(limit int) ([]SessionSummary, error) {
 		var ended sql.NullInt64
 		if err := rows.Scan(
 			&ss.ID, &started, &ended, &ss.Status, &ss.WorkSec, &ss.BreakSec, &ss.TotalSec,
-			&ss.TaskTitle, &ss.ProjectName, &ss.ProjectColor, &ss.WorkedSec,
+			&ss.TaskTitle, &ss.ProjectName, &ss.ProjectColor, &ss.WorkedSec, &ss.WallSec, &ss.NoteCount,
 		); err != nil {
 			return nil, err
 		}
@@ -145,7 +186,9 @@ type SessionSummary struct {
 	WorkSec      int
 	BreakSec     int
 	TotalSec     int
-	WorkedSec    int
+	WorkedSec    int // active focus time (work entries), excludes pauses/breaks
+	WallSec      int // wall-clock time from start to end (or now), includes everything
+	NoteCount    int
 	TaskTitle    string
 	ProjectName  string
 	ProjectColor string

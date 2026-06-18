@@ -18,6 +18,7 @@ const (
 	OpTrack   = "track"   // toggle an ambient layer (by Index)
 	OpVolume  = "volume"  // set volume (Volume 0..1)
 	OpPreview = "preview" // play the start + end chimes as a demo
+	OpSetTask = "settask" // switch the current task (TaskID, 0 = no task)
 	OpEnd     = "end"     // end the session and stop the daemon
 )
 
@@ -26,6 +27,7 @@ type Command struct {
 	Op     string  `json:"op"`
 	Index  int     `json:"index,omitempty"`
 	Volume float64 `json:"volume,omitempty"`
+	TaskID int64   `json:"task_id,omitempty"`
 }
 
 // TrackInfo mirrors an ambient layer's state for display.
@@ -37,20 +39,22 @@ type TrackInfo struct {
 
 // Snapshot is the daemon's current state, returned for every command.
 type Snapshot struct {
-	SessionID   int64       `json:"session_id"`
-	TaskTitle   string      `json:"task_title"`
-	ProjectName string      `json:"project_name"`
-	Phase       string      `json:"phase"` // "work" | "break"
-	Running     bool        `json:"running"`
-	Remaining   int         `json:"remaining"`
-	Planned     int         `json:"planned"`
-	CycleIndex  int         `json:"cycle_index"`
-	Cycles      int         `json:"cycles"`
-	Finished    bool        `json:"finished"`
-	Accrued     int         `json:"accrued"`     // work seconds this session
-	TodayTotal  int         `json:"today_total"` // total work seconds today
-	Volume      float64     `json:"volume"`
-	Tracks      []TrackInfo `json:"tracks"`
+	SessionID     int64       `json:"session_id"`
+	CurrentTaskID int64       `json:"current_task_id"` // 0 = no task / general focus
+	TaskTitle     string      `json:"task_title"`
+	ProjectName   string      `json:"project_name"`
+	Phase         string      `json:"phase"` // "work" | "break"
+	Running       bool        `json:"running"`
+	Remaining     int         `json:"remaining"`
+	Planned       int         `json:"planned"`
+	CycleIndex    int         `json:"cycle_index"`
+	Cycles        int         `json:"cycles"`
+	Finished      bool        `json:"finished"`
+	Accrued       int         `json:"accrued"`     // active focus seconds this session (excludes pauses)
+	WallSec       int         `json:"wall_sec"`    // wall-clock seconds since the session started
+	TodayTotal    int         `json:"today_total"` // total work seconds today
+	Volume        float64     `json:"volume"`
+	Tracks        []TrackInfo `json:"tracks"`
 }
 
 // SocketPath returns the daemon's Unix socket path.

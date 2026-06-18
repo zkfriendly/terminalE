@@ -87,6 +87,11 @@ func (c *Client) SetVolume(v float64) (Snapshot, error) {
 // Preview plays the start and end chimes so the user knows what to listen for.
 func (c *Client) Preview() (Snapshot, error) { return c.do(Command{Op: OpPreview}) }
 
+// SetTask switches the current task (0 = no task / just focus).
+func (c *Client) SetTask(taskID int64) (Snapshot, error) {
+	return c.do(Command{Op: OpSetTask, TaskID: taskID})
+}
+
 // End ends the session and stops the daemon.
 func (c *Client) End() (Snapshot, error) { return c.do(Command{Op: OpEnd}) }
 
@@ -119,6 +124,23 @@ func EnsureDaemon(sessionID int64) (*Client, error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("focus daemon did not start")
+}
+
+// ResumeDaemon resumes a previously-ended session. A finished daemon may still be
+// lingering on the socket (it sticks around for a grace period after a session
+// ends); this asks it to exit and waits for it to release the socket, then starts
+// a fresh daemon for sessionID that restores its persisted runtime.
+func ResumeDaemon(sessionID int64) (*Client, error) {
+	if IsAlive() {
+		if c, err := Dial(); err == nil {
+			_, _ = c.End() // a finished daemon just exits; nothing left to record
+			c.Close()
+		}
+		for i := 0; i < 80 && IsAlive(); i++ {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	return EnsureDaemon(sessionID)
 }
 
 // spawnDaemon launches the daemon as a detached background process.

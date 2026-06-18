@@ -27,6 +27,11 @@ type Config struct {
 	Volume         float64         `json:"volume"` // 0.0 (silent) .. 1.0 (full)
 	ChimesEnabled  bool            `json:"chimes_enabled"`
 	Layers         map[string]bool `json:"layers"` // ambient layer on/off (e.g. beat15, beat45)
+
+	// LM Studio (OpenAI-compatible) for auto-labeling session notes.
+	LMStudioEnabled bool   `json:"lm_studio_enabled"`
+	LMStudioURL     string `json:"lm_studio_url"`
+	LMStudioModel   string `json:"lm_studio_model"` // empty = local-model
 }
 
 // Default returns a 3-min prepare + classic 50/10 over 4h session.
@@ -44,6 +49,8 @@ func Default() Config {
 			"beat15": false,
 			"beat45": false,
 		},
+		LMStudioEnabled: true,
+		LMStudioURL:     "http://127.0.0.1:1234",
 	}
 }
 
@@ -128,6 +135,9 @@ func (c *Config) normalize() {
 	}
 	if c.Layers == nil {
 		c.Layers = map[string]bool{"beat15": false, "beat45": false}
+	}
+	if c.LMStudioURL == "" {
+		c.LMStudioURL = "http://127.0.0.1:1234"
 	}
 }
 

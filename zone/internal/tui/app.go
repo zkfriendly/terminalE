@@ -18,14 +18,17 @@ const (
 	viewDashboard viewID = iota
 	viewZone
 	viewStats
+	viewHistory
 )
 
 // Messages used for navigation between views.
 type (
 	tickMsg          time.Time
-	startSessionMsg  struct{ task store.Task }
-	resumeSessionMsg struct{}
+	startSessionMsg  struct{ task *store.Task } // optional starting current task
+	resumeSessionMsg struct{ task *store.Task } // optional task to switch to on resume
+	resumeLastMsg    struct{}                   // resume the most recent ended session
 	gotoStatsMsg     struct{}
+	gotoHistoryMsg   struct{}
 	gotoDashboardMsg struct{}
 	quitMsg          struct{}
 )
@@ -46,6 +49,7 @@ type App struct {
 	dashboard *dashboard
 	zone      *zoneView
 	stats     *statsView
+	history   *historyView
 }
 
 // NewApp builds the root model. If a focus session is already running (e.g. it
@@ -94,14 +98,30 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resumeSessionMsg:
 		if sess, ok, err := m.store.ActiveSession(); err == nil && ok {
 			m.attach(sess)
+			// If the user picked a different task before resuming, switch the
+			// running session over to it.
+			if msg.task != nil && m.zone != nil && m.zone.client != nil {
+				if snap, err := m.zone.client.SetTask(msg.task.ID); err == nil {
+					m.zone.snap = snap
+				}
+			}
 		} else {
 			m.dashboard.reload()
 		}
 		return m, nil
 
+	case resumeLastMsg:
+		m.resumeLast()
+		return m, nil
+
 	case gotoStatsMsg:
 		m.stats = newStats(m.store, m.styles)
 		m.view = viewStats
+		return m, nil
+
+	case gotoHistoryMsg:
+		m.history = newHistory(m.store, m.styles)
+		m.view = viewHistory
 		return m, nil
 
 	case gotoDashboardMsg:
@@ -125,6 +145,8 @@ func (m *App) View() tea.View {
 		content = m.zone.render(m.width, m.height)
 	case viewStats:
 		content = m.stats.render(m.width, m.height)
+	case viewHistory:
+		content = m.history.render(m.width, m.height)
 	default:
 		content = m.dashboard.render(m.width, m.height)
 	}
@@ -144,6 +166,10 @@ func (m *App) updateActive(msg tea.Msg) tea.Cmd {
 		if m.stats != nil {
 			return m.stats.update(msg)
 		}
+	case viewHistory:
+		if m.history != nil {
+			return m.history.update(msg)
+		}
 	default:
 		if m.dashboard != nil {
 			return m.dashboard.update(msg)
@@ -152,7 +178,7 @@ func (m *App) updateActive(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (m *App) startSession(t store.Task) tea.Cmd {
+func (m *App) startSession(t *store.Task) tea.Cmd {
 	// Stop any standalone tracking before entering a focus session.
 	m.dashboard.stopTracking()
 
@@ -162,7 +188,12 @@ func (m *App) startSession(t store.Task) tea.Cmd {
 		return nil
 	}
 
-	sess, err := m.store.CreateSession(t.ID, m.cfg.WorkSec(), m.cfg.BreakSec(), m.cfg.TotalSec(), m.cfg.PrepareSec())
+	var taskID *int64
+	if t != nil {
+		id := t.ID
+		taskID = &id
+	}
+	sess, err := m.store.CreateSession(taskID, m.cfg.WorkSec(), m.cfg.BreakSec(), m.cfg.TotalSec(), m.cfg.PrepareSec())
 	if err != nil {
 		m.dashboard.err = err
 		return nil
@@ -171,9 +202,30 @@ func (m *App) startSession(t store.Task) tea.Cmd {
 	return nil
 }
 
+// resumeLast reopens the most recent ended session (if it was ended early) and
+// resumes it from where it left off.
+func (m *App) resumeLast() {
+	sess, ok, err := m.store.LastEndedSession()
+	if err != nil || !ok || sess.Status != store.SessionAbandoned {
+		m.dashboard.reload()
+		return
+	}
+	if err := m.store.ReopenSession(sess.ID); err != nil {
+		m.dashboard.err = err
+		return
+	}
+	sess.Status = store.SessionActive
+	m.connect(sess, session.ResumeDaemon)
+}
+
 // attach spawns/connects the focus daemon for sess and switches to the zone view.
 func (m *App) attach(sess store.Session) {
-	client, err := session.EnsureDaemon(sess.ID)
+	m.connect(sess, session.EnsureDaemon)
+}
+
+// connect runs/connects the daemon for sess via ensure and switches to the zone.
+func (m *App) connect(sess store.Session, ensure func(int64) (*session.Client, error)) {
+	client, err := ensure(sess.ID)
 	if err != nil {
 		// Couldn't run the daemon; abandon the session so it doesn't linger.
 		_ = m.store.EndSession(sess.ID, store.SessionAbandoned)
@@ -182,7 +234,7 @@ func (m *App) attach(sess store.Session) {
 		return
 	}
 	snap, _ := client.Status()
-	m.zone = newZone(client, m.styles, snap)
+	m.zone = newZone(m.store, client, m.styles, m.cfg, snap)
 	m.view = viewZone
 }
 

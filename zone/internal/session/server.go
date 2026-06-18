@@ -28,7 +28,14 @@ type server struct {
 	engine *timer.Engine
 
 	session store.Session
-	task    store.Task
+
+	// Current task (may be unset for general focus). segCredited is how many
+	// seconds of the in-progress work block have already been attributed (to the
+	// current or a previously-selected task), so switching tasks mid-block splits
+	// the time correctly.
+	task        store.Task
+	hasTask     bool
+	segCredited int
 
 	accrued    int
 	finished   bool
@@ -73,9 +80,13 @@ func RunDaemon(sessionID int64) error {
 	if err != nil {
 		return err
 	}
-	task, err := st.GetTask(sess.TaskID)
-	if err != nil {
-		return err
+	var task store.Task
+	hasTask := false
+	if sess.TaskID != nil {
+		if t, err := st.GetTask(*sess.TaskID); err == nil {
+			task = t
+			hasTask = true
+		}
 	}
 	rt, err := st.LoadRuntime(sessionID)
 	if err != nil {
@@ -102,6 +113,7 @@ func RunDaemon(sessionID int64) error {
 		engine:  engine,
 		session: sess,
 		task:    task,
+		hasTask: hasTask,
 		accrued: rt.Accrued,
 		ln:      ln,
 		done:    make(chan struct{}),
@@ -203,6 +215,10 @@ func (s *server) handle(cmd Command) Snapshot {
 		s.audio.SetVolume(cmd.Volume)
 	case OpPreview:
 		s.previewChimes()
+	case OpSetTask:
+		if !s.finished {
+			s.setTask(cmd.TaskID)
+		}
 	case OpEnd:
 		s.endLocked()
 		defer s.signalDone()
@@ -221,10 +237,35 @@ func (s *server) previewChimes() {
 	}()
 }
 
+// setTask switches the current task, attributing the work done since the last
+// switch to the previous task before changing. Caller holds the mutex.
+func (s *server) setTask(taskID int64) {
+	// Credit time accrued so far in this work block to the outgoing task.
+	if s.engine.Phase() == timer.Work {
+		s.recordWorkSegment(s.engine.Elapsed())
+	}
+	if taskID == 0 {
+		s.task = store.Task{}
+		s.hasTask = false
+		_ = s.store.SetSessionTask(s.session.ID, nil)
+		return
+	}
+	if t, err := s.store.GetTask(taskID); err == nil {
+		s.task = t
+		s.hasTask = true
+		id := taskID
+		_ = s.store.SetSessionTask(s.session.ID, &id)
+	}
+}
+
 // handleTransition records the finished block and reacts to the next one.
 // Caller must hold the mutex.
 func (s *server) handleTransition(tr timer.Transition) {
-	s.recordBlock(tr.Ended.Phase, tr.Elapsed)
+	// Credit the remaining portion of an ending work block to the current task.
+	if tr.Ended.Phase == timer.Work {
+		s.recordWorkSegment(tr.Elapsed)
+	}
+	s.segCredited = 0 // reset for the next block
 
 	if tr.Finished {
 		s.finished = true
@@ -246,21 +287,23 @@ func (s *server) handleTransition(tr timer.Transition) {
 	}
 }
 
-// recordBlock persists a completed block as a time entry. Caller holds the mutex.
-func (s *server) recordBlock(phase timer.Phase, elapsed int) {
-	if elapsed <= 0 || phase == timer.Prepare {
-		return // the prepare block is settle-in time; never tracked
+// recordWorkSegment attributes the portion of the current work block that hasn't
+// been credited yet (blockElapsed - segCredited) to the current task, if any.
+// Caller holds the mutex.
+func (s *server) recordWorkSegment(blockElapsed int) {
+	delta := blockElapsed - s.segCredited
+	if delta <= 0 {
+		return
 	}
-	kind := store.KindWork
-	if phase == timer.Break {
-		kind = store.KindBreak
+	if s.hasTask {
+		end := time.Now()
+		start := end.Add(-time.Duration(delta) * time.Second)
+		sid := s.session.ID
+		if _, err := s.store.AddEntry(s.task.ID, &sid, store.KindWork, start, end); err == nil {
+			s.accrued += delta
+		}
 	}
-	end := time.Now()
-	start := end.Add(-time.Duration(elapsed) * time.Second)
-	sid := s.session.ID
-	if _, err := s.store.AddEntry(s.task.ID, &sid, kind, start, end); err == nil && phase == timer.Work {
-		s.accrued += elapsed
-	}
+	s.segCredited = blockElapsed
 }
 
 // endLocked ends the session early, recording any in-flight work. Holds the mutex.
@@ -269,7 +312,7 @@ func (s *server) endLocked() {
 		return
 	}
 	if s.engine.Phase() == timer.Work {
-		s.recordBlock(timer.Work, s.engine.Elapsed())
+		s.recordWorkSegment(s.engine.Elapsed())
 	}
 	s.audio.StopAmbient()
 	s.finished = true
@@ -292,8 +335,10 @@ func (s *server) persistRuntime() {
 // snapshotLocked builds a Snapshot of the current state. Caller holds the mutex.
 func (s *server) snapshotLocked() Snapshot {
 	today, _ := s.store.TodayWorkSeconds()
-	if !s.finished && s.engine.Phase() == timer.Work {
-		today += s.engine.Elapsed()
+	// Add the not-yet-recorded portion of the current work block (it only lands
+	// in the DB at a block boundary / task switch), when a task is being tracked.
+	if !s.finished && s.engine.Phase() == timer.Work && s.hasTask {
+		today += s.engine.Elapsed() - s.segCredited
 	}
 
 	var tracks []TrackInfo
@@ -301,21 +346,33 @@ func (s *server) snapshotLocked() Snapshot {
 		tracks = append(tracks, TrackInfo{ID: t.ID, Label: t.Label, Enabled: t.Enabled})
 	}
 
+	var curTaskID int64
+	if s.hasTask {
+		curTaskID = s.task.ID
+	}
+
+	wall := 0
+	if !s.session.StartedAt.IsZero() {
+		wall = int(time.Since(s.session.StartedAt).Seconds())
+	}
+
 	return Snapshot{
-		SessionID:   s.session.ID,
-		TaskTitle:   s.task.Title,
-		ProjectName: s.task.ProjectName,
-		Phase:       s.engine.Phase().String(),
-		Running:     s.engine.Running(),
-		Remaining:   s.engine.Remaining(),
-		Planned:     s.engine.Planned(),
-		CycleIndex:  s.engine.CycleIndex(),
-		Cycles:      s.engine.Cycles(),
-		Finished:    s.finished,
-		Accrued:     s.accrued,
-		TodayTotal:  today,
-		Volume:      s.audio.Volume(),
-		Tracks:      tracks,
+		SessionID:     s.session.ID,
+		CurrentTaskID: curTaskID,
+		TaskTitle:     s.task.Title,
+		ProjectName:   s.task.ProjectName,
+		Phase:         s.engine.Phase().String(),
+		Running:       s.engine.Running(),
+		Remaining:     s.engine.Remaining(),
+		Planned:       s.engine.Planned(),
+		CycleIndex:    s.engine.CycleIndex(),
+		Cycles:        s.engine.Cycles(),
+		Finished:      s.finished,
+		Accrued:       s.accrued,
+		WallSec:       wall,
+		TodayTotal:    today,
+		Volume:        s.audio.Volume(),
+		Tracks:        tracks,
 	}
 }
 

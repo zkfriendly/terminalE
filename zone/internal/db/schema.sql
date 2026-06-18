@@ -20,7 +20,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    -- The session's *current* task (nullable: a session is general, and the user
+    -- can switch tasks during it). Time is attributed to whichever task is current.
+    task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
     work_sec      INTEGER NOT NULL,
     break_sec     INTEGER NOT NULL,
     total_sec     INTEGER NOT NULL,
@@ -50,3 +52,13 @@ CREATE TABLE IF NOT EXISTS entries (
 CREATE INDEX IF NOT EXISTS idx_entries_task    ON entries(task_id);
 CREATE INDEX IF NOT EXISTS idx_entries_started ON entries(started_at);
 CREATE INDEX IF NOT EXISTS idx_entries_kind    ON entries(kind);
+
+CREATE TABLE IF NOT EXISTS session_notes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    body       TEXT    NOT NULL,
+    title      TEXT    NOT NULL DEFAULT '',
+    emoji      TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_session_notes_session ON session_notes(session_id);

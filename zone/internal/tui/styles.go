@@ -96,6 +96,15 @@ func wrapHints(entries []string, sep string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+// padRight pads s with spaces to n display cells (ANSI-aware via lipgloss.Width).
+func padRight(s string, n int) string {
+	w := lipgloss.Width(s)
+	if w >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-w)
+}
+
 // formatClock renders seconds as MM:SS or H:MM:SS.
 func formatClock(sec int) string {
 	if sec < 0 {

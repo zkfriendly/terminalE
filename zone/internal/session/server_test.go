@@ -58,7 +58,7 @@ func TestDaemonRoundtrip(t *testing.T) {
 	st := isolate(t)
 	p, _ := st.CreateProject("Code", "")
 	task, _ := st.CreateTask(p.ID, "Refactor")
-	sess, err := st.CreateSession(task.ID, 2, 1, 3, 0) // 1 cycle: 2s work, 1s break
+	sess, err := st.CreateSession(&task.ID, 2, 1, 3, 0) // 1 cycle: 2s work, 1s break
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -119,11 +119,75 @@ func TestDaemonRoundtrip(t *testing.T) {
 	}
 }
 
+func TestDaemonTaskSwitching(t *testing.T) {
+	st := isolate(t)
+	p, _ := st.CreateProject("Code", "")
+	alpha, _ := st.CreateTask(p.ID, "Alpha")
+	beta, _ := st.CreateTask(p.ID, "Beta")
+	// General session (no starting task), one long work block.
+	sess, _ := st.CreateSession(nil, 30, 1, 31, 0)
+
+	daemonErr := make(chan error, 1)
+	go func() { daemonErr <- RunDaemon(sess.ID) }()
+	t.Cleanup(func() {
+		if c, err := Dial(); err == nil {
+			c.End()
+			c.Close()
+		}
+		<-daemonErr
+	})
+	if !waitFor(IsAlive, 3*time.Second) {
+		t.Fatal("daemon did not start")
+	}
+	client, err := Dial()
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	snap, _ := client.Status()
+	if snap.CurrentTaskID != 0 || snap.TaskTitle != "" {
+		t.Fatalf("expected general (no task) start, got %+v", snap)
+	}
+
+	// Work ~1.2s on Alpha, then switch to Beta and work ~1.2s.
+	snap, _ = client.SetTask(alpha.ID)
+	if snap.CurrentTaskID != alpha.ID || snap.TaskTitle != "Alpha" {
+		t.Fatalf("expected current task Alpha, got %+v", snap)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	snap, _ = client.SetTask(beta.ID)
+	if snap.CurrentTaskID != beta.ID {
+		t.Fatalf("expected current task Beta, got %+v", snap)
+	}
+	time.Sleep(1200 * time.Millisecond)
+
+	// Ending records the in-flight segment for Beta.
+	_, _ = client.End()
+	if !waitFor(func() bool { return !IsAlive() }, 3*time.Second) {
+		t.Fatal("daemon did not shut down")
+	}
+
+	ws, _ := st.TaskWorkSeconds()
+	if ws[alpha.ID] <= 0 {
+		t.Fatalf("expected time attributed to Alpha, got %d", ws[alpha.ID])
+	}
+	if ws[beta.ID] <= 0 {
+		t.Fatalf("expected time attributed to Beta, got %d", ws[beta.ID])
+	}
+
+	// The session's current task should have been persisted as Beta.
+	final, _ := st.GetSession(sess.ID)
+	if final.TaskID == nil || *final.TaskID != beta.ID {
+		t.Fatalf("expected session current task = Beta, got %v", final.TaskID)
+	}
+}
+
 func TestDaemonResumesPersistedState(t *testing.T) {
 	st := isolate(t)
 	p, _ := st.CreateProject("Code", "")
 	task, _ := st.CreateTask(p.ID, "Resume me")
-	sess, _ := st.CreateSession(task.ID, 3000, 600, 14400, 180)
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
 
 	// Simulate a session that was mid-break with progress when the daemon stopped.
 	if err := st.SaveRuntime(sess.ID, store.Runtime{
@@ -160,5 +224,59 @@ func TestDaemonResumesPersistedState(t *testing.T) {
 	}
 	if snap.Accrued != 7200 {
 		t.Fatalf("expected accrued 7200, got %d", snap.Accrued)
+	}
+}
+
+func TestDaemonResumesAbandonedSession(t *testing.T) {
+	st := isolate(t)
+	p, _ := st.CreateProject("Code", "")
+	task, _ := st.CreateTask(p.ID, "Pick me back up")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	// Simulate a session that was running mid-work block, then ended early.
+	if err := st.SaveRuntime(sess.ID, store.Runtime{
+		Phase: "work", Remaining: 1500, Cycle: 1, Accrued: 1500, Running: true,
+	}); err != nil {
+		t.Fatalf("save runtime: %v", err)
+	}
+	if err := st.EndSession(sess.ID, store.SessionAbandoned); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+
+	// Reopen and resume it (as the UI's resume path does before spawning).
+	if err := st.ReopenSession(sess.ID); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+
+	daemonErr := make(chan error, 1)
+	go func() { daemonErr <- RunDaemon(sess.ID) }()
+	t.Cleanup(func() {
+		if c, err := Dial(); err == nil {
+			c.End()
+			c.Close()
+		}
+		<-daemonErr
+	})
+	if !waitFor(IsAlive, 3*time.Second) {
+		t.Fatal("daemon did not start")
+	}
+	client, err := Dial()
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	snap, _ := client.Status()
+	if snap.Phase != "work" || snap.CycleIndex != 1 {
+		t.Fatalf("resumed session lost its place: %+v", snap)
+	}
+	if !snap.Running {
+		t.Fatal("a session ended while running should resume running")
+	}
+	if snap.Remaining > 1500 || snap.Remaining < 1490 {
+		t.Fatalf("expected to resume near 1500s remaining, got %d", snap.Remaining)
+	}
+	if snap.Finished {
+		t.Fatal("resumed session should not be finished")
 	}
 }

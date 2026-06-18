@@ -16,6 +16,10 @@ lives in your terminal.
   - **Focus zone** — a full-screen pomodoro session with a big countdown,
     cycle progress, ambient audio, and transition chimes.
   - **Standalone tracking** — start/stop a stopwatch on any task.
+- Focus sessions are **general**, not tied to one task: start a session and
+  switch which task you're working on at any time (press `t`). Time is attributed
+  to whichever task is current — switching mid-block splits it correctly. You can
+  also run with no task at all ("just focus").
 - Every session opens with a short **prepare** block (3 min by default): a calm
   welcome screen that nudges you to grab water, breathe, and settle in, and
   previews the chimes so you know how a session starts and ends. Configurable —
@@ -57,7 +61,8 @@ Files: `zone.db` (database) and `config.json` (settings).
 | -------------- | ---------------------------------------- |
 | `↑`/`↓`, `j/k` | Move selection                           |
 | `tab`, `h/l`   | Switch between Projects and Tasks panes  |
-| `enter` / `f`  | Enter the focus zone for the task        |
+| `enter` / `f`  | Start a focus session (defaults current task to the selected one); resumes a running one if present |
+| `R`            | Resume the last session you ended early (from where you left off) |
 | `t`            | Start/stop standalone tracking on a task |
 | `n`            | New project / task (in focused pane)     |
 | `e`            | Rename selected project / task           |
@@ -71,6 +76,8 @@ Files: `zone.db` (database) and `config.json` (settings).
 | Key       | Action                                            |
 | --------- | ------------------------------------------------- |
 | `space`   | Pause / resume                                    |
+| `t`       | Switch the current task (or "just focus")           |
+| `n`       | Take session notes (vim-style editor, `:wq` to save) |
 | `p`       | Preview the start + end chimes                     |
 | `s`       | Skip the current block (during prepare: start now) |
 | `1`-`9`   | Toggle ambient sound layers (overlap allowed)     |
@@ -81,12 +88,45 @@ Files: `zone.db` (database) and `config.json` (settings).
 Closing the terminal (or `ctrl+c`) also just backgrounds the session — it keeps
 running. Only `esc` ends it.
 
+**Session notes:** press `n` during a focus session to open the note browser.
+Pick an earlier note to edit or choose **+ new note**. When you save a note,
+zone asks a local **[LM Studio](https://lmstudio.ai/)** server (OpenAI-compatible
+API) for a short **title** and **emoji** label. Editing is vim-style: insert,
+`esc` for normal, `i`/`a`/`o` to insert, `:w` to save, `:wq` or `ZZ` to save and
+return to focus, `:q` to discard and close. `esc` in normal mode (or `:e`) returns
+to the browser; `esc` in the browser closes notes. View notes later from **Stats →
+History** (`h` then `n` on a session).
+
+If you end a session early, the dashboard offers to **resume** it (press `R`):
+it reopens that session and the focus timer continues from exactly where you left
+off — same phase, time remaining, cycle, and accrued focus. You can always start a
+fresh session instead with `enter`/`f`.
+
 ### Stats
 
-| Key   | Action  |
-| ----- | ------- |
-| `r`   | Refresh |
-| `esc` | Back    |
+| Key   | Action               |
+| ----- | -------------------- |
+| `h`   | Open full history    |
+| `r`   | Refresh              |
+| `esc` | Back                 |
+
+Each session shows both **focus** time (active work, excluding pauses and
+breaks) and **wall** time (total clock time from start to end). Useful when you
+pause/resume a lot and want to see how long a session really took.
+
+### Session history
+
+A scrollable list of every focus session (date, task or "general focus",
+focus time, wall time, and status).
+
+| Key       | Action          |
+| --------- | --------------- |
+| `↑` / `↓` | Select session  |
+| `n`       | View session notes |
+| `g` / `G` | Jump top/bottom |
+| `r`       | Refresh         |
+| `esc`     | Back to stats   |
+| `q`       | Back to dashboard |
 
 ## Background focus daemon
 
@@ -122,9 +162,18 @@ session shape and audio:
   "layers": {
     "beat15": false,
     "beat45": false
-  }
+  },
+  "lm_studio_enabled": true,
+  "lm_studio_url": "http://127.0.0.1:1234",
+  "lm_studio_model": ""
 }
 ```
+
+- `lm_studio_enabled`: when `true`, saved notes are labeled via LM Studio (must be
+  running with a model loaded and the local server started).
+- `lm_studio_url`: base URL for the OpenAI-compatible API (default LM Studio port).
+- `lm_studio_model`: model name passed to the API; leave empty to use `local-model`
+  (fine when only one model is loaded).
 
 - `prepare_minutes`: a one-off settle-in block before the first work block. It is
   not counted as work time. Set to `0` to start working immediately.

@@ -7,7 +7,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/zkfriendly/zone/internal/config"
 	"github.com/zkfriendly/zone/internal/session"
+	"github.com/zkfriendly/zone/internal/store"
 )
 
 // zoneView is the full-screen pomodoro focus experience. It is a thin client of
@@ -16,6 +18,8 @@ import (
 // closed.
 type zoneView struct {
 	styles Styles
+	store  *store.Store
+	cfg    config.Config
 	client *session.Client
 
 	snap          session.Snapshot
@@ -23,16 +27,47 @@ type zoneView struct {
 
 	confirmingSkip bool
 	disconnected   bool
+
+	// Task switcher overlay.
+	picking bool
+	tasks   []store.Task // picker entries; index 0 is the "no task" option
+	pickIdx int
+
+	// Session notes overlay.
+	noting         bool
+	noteEditor     vimNoteEditor
+	notes          []store.SessionNote
+	editingNoteID  int64 // 0 = composing a new note
+	notePicking    bool
+	notePickIdx    int
+	enrichingNotes map[int64]bool // notes waiting on LM Studio
+	noteLabelErr   string         // last labeling error (shown in picker)
 }
 
-func newZone(client *session.Client, s Styles, initial session.Snapshot) *zoneView {
-	return &zoneView{styles: s, client: client, snap: initial}
+type noteEnrichedMsg struct {
+	noteID int64
+	note   store.SessionNote
+	err    error
+}
+
+func newZone(st *store.Store, client *session.Client, s Styles, cfg config.Config, initial session.Snapshot) *zoneView {
+	return &zoneView{
+		store:          st,
+		cfg:            cfg,
+		styles:         s,
+		client:         client,
+		snap:           initial,
+		enrichingNotes: map[int64]bool{},
+	}
 }
 
 func (z *zoneView) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tickMsg:
 		z.refresh()
+		return nil
+	case noteEnrichedMsg:
+		z.onNoteEnriched(msg)
 		return nil
 	case tea.KeyPressMsg:
 		return z.handleKey(msg)
@@ -74,6 +109,14 @@ func (z *zoneView) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	key := msg.String()
 
+	if z.picking {
+		return z.handlePickerKey(key)
+	}
+
+	if z.noting {
+		return z.handleNotesKey(msg)
+	}
+
 	if z.confirmingSkip {
 		switch key {
 		case "y", "s", "enter":
@@ -104,6 +147,11 @@ func (z *zoneView) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if z.client != nil {
 			z.apply(z.client.Preview())
 		}
+	case "t":
+		z.openPicker()
+	case "n":
+		z.openNotes()
+		return z.enrichPendingCmd()
 	case "s":
 		// During prepare, starting early is harmless, so skip straight in.
 		if z.snap.Phase == "prepare" {
@@ -143,6 +191,42 @@ func (z *zoneView) detach() tea.Cmd {
 	return func() tea.Msg { return gotoDashboardMsg{} }
 }
 
+// openPicker loads the task list and opens the task switcher overlay. Entry 0 is
+// always the "no task / just focus" option (represented by a zero-id task).
+func (z *zoneView) openPicker() {
+	z.tasks = []store.Task{{}} // index 0 = no task
+	if z.store != nil {
+		if tasks, err := z.store.ListAllTasks(false); err == nil {
+			z.tasks = append(z.tasks, tasks...)
+		}
+	}
+	z.pickIdx = 0
+	for i, t := range z.tasks {
+		if t.ID == z.snap.CurrentTaskID {
+			z.pickIdx = i
+			break
+		}
+	}
+	z.picking = true
+}
+
+func (z *zoneView) handlePickerKey(key string) tea.Cmd {
+	switch key {
+	case "up", "k":
+		z.pickIdx = clampInt(z.pickIdx-1, 0, len(z.tasks)-1)
+	case "down", "j":
+		z.pickIdx = clampInt(z.pickIdx+1, 0, len(z.tasks)-1)
+	case "enter", "t", " ", "space":
+		if z.pickIdx >= 0 && z.pickIdx < len(z.tasks) && z.client != nil {
+			z.apply(z.client.SetTask(z.tasks[z.pickIdx].ID))
+		}
+		z.picking = false
+	case "esc", "q":
+		z.picking = false
+	}
+	return nil
+}
+
 func (z *zoneView) render(width, height int) string {
 	z.width, z.height = width, height
 	if width == 0 {
@@ -154,6 +238,12 @@ func (z *zoneView) render(width, height int) string {
 	}
 	if z.snap.Finished {
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, z.renderSummary())
+	}
+	if z.picking {
+		return z.renderWithTimerBar(z.renderPicker(width, height), width, height)
+	}
+	if z.noting {
+		return z.renderWithTimerBar(z.renderNotes(width, height), width, height)
 	}
 	if z.snap.Phase == "prepare" {
 		return z.renderPrepare(width, height)
@@ -178,15 +268,25 @@ func (z *zoneView) render(width, height int) string {
 
 	clock := clockStyle.Render(bigText(formatClock(z.snap.Remaining)))
 
-	taskLine := s.Title.Render(z.snap.TaskTitle)
-	projLine := s.Subtitle.Render(z.snap.ProjectName)
+	var taskLine, projLine string
+	if z.snap.TaskTitle != "" {
+		taskLine = s.Title.Render(z.snap.TaskTitle)
+		projLine = s.Subtitle.Render(z.snap.ProjectName)
+	} else {
+		taskLine = s.Dim.Render("general focus")
+		projLine = s.Help.Render("press ") + s.HelpKey.Render("t") + s.Help.Render(" to pick a task")
+	}
 
 	dots := z.renderCycles()
+	sessionLine := s.Dim.Render("session  ") + s.StatValue.Render(formatDur(z.snap.Accrued)) +
+		s.Dim.Render(" focus  ·  ") + s.StatValue.Render(formatDur(z.snap.WallSec)) + s.Dim.Render(" elapsed")
 	statLine := s.Dim.Render("today in the zone: ") + s.StatValue.Render(formatDur(z.snap.TodayTotal))
 	soundLine := z.renderSounds(width)
 
 	footer := wrapHints([]string{
 		s.helpEntry("space", "pause"),
+		s.helpEntry("t", "task"),
+		s.helpEntry("n", "notes"),
 		s.helpEntry("s", "skip"),
 		s.helpEntry("1-9", "sounds"),
 		s.helpEntry("+/-", "volume"),
@@ -208,6 +308,7 @@ func (z *zoneView) render(width, height int) string {
 		"",
 		dots,
 		"",
+		sessionLine,
 		statLine,
 		"",
 		soundLine,
@@ -227,9 +328,15 @@ func (z *zoneView) renderPrepare(width, height int) string {
 	hi := s.Title.Render(greeting() + " — let's ease into the zone.")
 	sub := s.Subtitle.Render("Take a moment to settle in before you begin.")
 
-	about := s.Dim.Render("up next   ") + s.StatValue.Render(z.snap.TaskTitle)
-	if z.snap.ProjectName != "" {
-		about += s.Dim.Render("  ·  ") + s.Subtitle.Render(z.snap.ProjectName)
+	var about string
+	if z.snap.TaskTitle != "" {
+		about = s.Dim.Render("up next   ") + s.StatValue.Render(z.snap.TaskTitle)
+		if z.snap.ProjectName != "" {
+			about += s.Dim.Render("  ·  ") + s.Subtitle.Render(z.snap.ProjectName)
+		}
+	} else {
+		about = s.Dim.Render("general focus   ") +
+			s.Help.Render("press ") + s.HelpKey.Render("t") + s.Help.Render(" to pick a task")
 	}
 
 	bullet := s.Accent.Render("•") + " "
@@ -257,6 +364,8 @@ func (z *zoneView) renderPrepare(width, height int) string {
 
 	footer := wrapHints([]string{
 		s.helpEntry("p", "hear the sounds"),
+		s.helpEntry("t", "task"),
+		s.helpEntry("n", "notes"),
 		s.helpEntry("space", "pause"),
 		s.helpEntry("s", "start now"),
 		s.helpEntry("b", "background"),
@@ -280,6 +389,50 @@ func (z *zoneView) renderPrepare(width, height int) string {
 		footer,
 	)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block)
+}
+
+// renderPicker draws the task switcher overlay.
+func (z *zoneView) renderPicker(width, height int) string {
+	s := z.styles
+	var lines []string
+	lines = append(lines, s.PaneTitle.Render("Switch task"), "")
+
+	for i, t := range z.tasks {
+		label := t.Title
+		if t.ID == 0 {
+			label = "no task · just focus"
+		} else if t.ProjectName != "" {
+			label = t.Title + "  " + s.Dim.Render(t.ProjectName)
+		}
+		marker := "  "
+		if t.ID == z.snap.CurrentTaskID {
+			marker = s.Work.Render("● ")
+		}
+		if i == z.pickIdx {
+			lines = append(lines, marker+s.ItemSel.Render(" "+plain(t)+" "))
+		} else {
+			lines = append(lines, marker+label)
+		}
+	}
+	lines = append(lines, "", s.Help.Render("↑↓ move · enter select · esc cancel"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colAccent).
+		Padding(1, 3).
+		Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// plain returns the bare label used inside the selection highlight.
+func plain(t store.Task) string {
+	if t.ID == 0 {
+		return "no task · just focus"
+	}
+	if t.ProjectName != "" {
+		return t.Title + " — " + t.ProjectName
+	}
+	return t.Title
 }
 
 // greeting returns a time-of-day greeting.
@@ -339,13 +492,18 @@ func (z *zoneView) renderSounds(width int) string {
 
 func (z *zoneView) renderSummary() string {
 	s := z.styles
+	lastTask := s.Title.Render(z.snap.TaskTitle)
+	if z.snap.TaskTitle == "" {
+		lastTask = s.Dim.Render("general focus")
+	}
 	body := lipgloss.JoinVertical(lipgloss.Center,
 		s.Work.Render("session complete"),
 		"",
-		s.Title.Render(z.snap.TaskTitle),
+		lastTask,
 		s.Subtitle.Render(z.snap.ProjectName),
 		"",
-		s.Dim.Render("focused for ")+s.StatValue.Render(formatDur(z.snap.Accrued)),
+		s.Dim.Render("focused for ")+s.StatValue.Render(formatDur(z.snap.Accrued))+
+			s.Dim.Render("  ·  ")+s.StatValue.Render(formatDur(z.snap.WallSec))+s.Dim.Render(" elapsed"),
 		"",
 		s.Help.Render("press any key to return"),
 	)
@@ -354,6 +512,57 @@ func (z *zoneView) renderSummary() string {
 		BorderForeground(colWork).
 		Padding(1, 4).
 		Render(body)
+}
+
+// renderWithTimerBar stacks overlay content above a persistent session timer bar.
+func (z *zoneView) renderWithTimerBar(main string, width, height int) string {
+	bar := z.renderTimerBar(width)
+	barH := lipgloss.Height(bar)
+	mainH := height - barH
+	if mainH < 1 {
+		mainH = 1
+	}
+	placed := lipgloss.Place(width, mainH, lipgloss.Center, lipgloss.Center, main)
+	return lipgloss.JoinVertical(lipgloss.Left, placed, bar)
+}
+
+func (z *zoneView) renderTimerBar(width int) string {
+	s := z.styles
+	var phase lipgloss.Style
+	var label string
+	switch z.snap.Phase {
+	case "break":
+		label = "◌ BREAK"
+		phase = lipgloss.NewStyle().Foreground(colBreak).Bold(true)
+	case "prepare":
+		label = "◎ PREPARE"
+		phase = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	default:
+		label = "● FOCUS"
+		phase = lipgloss.NewStyle().Foreground(colWork).Bold(true)
+	}
+	if !z.snap.Running && z.snap.Phase != "prepare" {
+		label = "⏸ PAUSED"
+		phase = s.Dim
+	}
+
+	left := phase.Render(label) + s.Dim.Render("  ") + s.StatValue.Render(formatClock(z.snap.Remaining))
+	right := ""
+	if z.snap.TaskTitle != "" {
+		right = s.Dim.Render(truncate(z.snap.TaskTitle, 40))
+	}
+
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	if gap < 1 {
+		gap = 1
+	}
+	line := left + strings.Repeat(" ", gap) + right
+	return lipgloss.NewStyle().
+		Width(width).
+		BorderTop(true).
+		BorderForeground(colDim).
+		Padding(0, 1).
+		Render(line)
 }
 
 func clampFloat(v, lo, hi float64) float64 {

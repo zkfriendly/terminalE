@@ -56,6 +56,36 @@ func (s *Store) ListTasks(projectID int64, includeArchived bool) ([]Task, error)
 	return out, rows.Err()
 }
 
+// ListAllTasks returns every task across all projects (with project names),
+// ordered by project then task. Used by the in-session task switcher.
+func (s *Store) ListAllTasks(includeArchived bool) ([]Task, error) {
+	q := `
+		SELECT t.id, t.project_id, t.title, t.status, t.archived, t.created_at, p.name
+		FROM tasks t JOIN projects p ON p.id = t.project_id`
+	if !includeArchived {
+		q += ` WHERE t.archived = 0 AND p.archived = 0`
+	}
+	q += ` ORDER BY p.name ASC, t.id ASC`
+
+	rows, err := s.db.Query(q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Task
+	for rows.Next() {
+		var t Task
+		var created int64
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Status, &t.Archived, &created, &t.ProjectName); err != nil {
+			return nil, err
+		}
+		t.CreatedAt = toTime(created)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // RenameTask updates a task's title.
 func (s *Store) RenameTask(id int64, title string) error {
 	_, err := s.db.Exec(`UPDATE tasks SET title = ? WHERE id = ?`, title, id)
