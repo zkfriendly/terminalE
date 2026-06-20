@@ -37,12 +37,14 @@ type zoneView struct {
 	// Session notes overlay.
 	noting         bool
 	noteEditor     vimNoteEditor
-	notes          []store.SessionNote
+	noteRows       []noteBrowseRow
 	editingNoteID  int64 // 0 = composing a new note
 	notePicking     bool
 	notePickIdx     int
 	notePickOffset       int // first visible row in the browse list
 	enrichingNotes       map[int64]bool // notes waiting on LM Studio
+	scanningActionables  map[int64]bool // notes waiting on actionable scan
+	deferActionableScan  bool           // run pending scan on next tick (resume path)
 	noteLabelErr         string         // last labeling error (shown in picker)
 	confirmingNoteDelete bool
 }
@@ -60,7 +62,8 @@ func newZone(st *store.Store, client *session.Client, s Styles, cfg *config.Conf
 		styles:         s,
 		client:         client,
 		snap:           initial,
-		enrichingNotes: map[int64]bool{},
+		enrichingNotes:      map[int64]bool{},
+		scanningActionables: map[int64]bool{},
 	}
 }
 
@@ -68,9 +71,16 @@ func (z *zoneView) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tickMsg:
 		z.refresh()
+		if z.deferActionableScan {
+			z.deferActionableScan = false
+			return tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
+		}
 		return nil
 	case noteEnrichedMsg:
 		z.onNoteEnriched(msg)
+		return nil
+	case noteActionablesScannedMsg:
+		z.onNoteActionablesScanned(msg)
 		return nil
 	case tea.KeyPressMsg:
 		return z.handleKey(msg)
@@ -163,7 +173,7 @@ func (z *zoneView) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		z.openPicker()
 	case "n":
 		z.openNotes()
-		return z.enrichPendingCmd()
+		return tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
 	case "s":
 		// During prepare, starting early is harmless, so skip straight in.
 		if z.snap.Phase == "prepare" {

@@ -40,34 +40,6 @@ func renderInfoBar(s Styles, entries []string, width int) string {
 		Render(content)
 }
 
-// composeShellLayout stacks action bar, page nav, body, and bottom info bar.
-func composeShellLayout(actionBar, navStrip, body, bottomBar string, width, height int) string {
-	topH := lipgloss.Height(actionBar)
-	navH := lipgloss.Height(navStrip)
-	bottomH := lipgloss.Height(bottomBar)
-	bodyH := height - topH - navH - bottomH
-	if bodyH < 1 {
-		bodyH = 1
-	}
-	bodyBox := lipgloss.NewStyle().
-		Width(width).
-		Height(bodyH).
-		Render(body)
-
-	var parts []string
-	if actionBar != "" {
-		parts = append(parts, actionBar)
-	}
-	if navStrip != "" {
-		parts = append(parts, navStrip)
-	}
-	parts = append(parts, bodyBox)
-	if bottomBar != "" {
-		parts = append(parts, bottomBar)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
-}
-
 // composeChrome stacks top action bar, body, and bottom info bar vertically.
 func composeChrome(topBar, body, bottomBar string, width, height int) string {
 	topH := lipgloss.Height(topBar)

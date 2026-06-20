@@ -27,6 +27,7 @@ type (
 	resumeLastMsg        struct{}
 	gotoStatsMsg         struct{}
 	gotoHistoryMsg       struct{}
+	gotoNotesMsg         struct{}
 	gotoSettingsMsg      struct{}
 	gotoWorkMsg          struct{}
 	shellToggleFocusMsg  struct{}
@@ -50,6 +51,7 @@ type App struct {
 	zone      *zoneView
 	stats     *statsView
 	history   *historyView
+	allNotes  *allNotesView
 	settings  *settingsView
 }
 
@@ -130,6 +132,12 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.history = newHistory(m.store, m.styles)
 		return m, nil
 
+	case gotoNotesMsg:
+		m.shell.syncPage(pageNotes)
+		m.shell.focusNav = false
+		m.allNotes = newAllNotes(m.store, &m.cfg, m.styles)
+		return m, m.allNotes.initScanCmd()
+
 	case gotoSettingsMsg:
 		path, _ := config.Path()
 		m.shell.syncPage(pageSettings)
@@ -153,6 +161,18 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case noteEnrichedMsg:
 		if m.zone != nil {
 			m.zone.onNoteEnriched(msg)
+		}
+		if m.allNotes != nil {
+			m.allNotes.onNoteEnriched(msg)
+		}
+		return m, nil
+
+	case noteActionablesScannedMsg:
+		if m.zone != nil {
+			m.zone.onNoteActionablesScanned(msg)
+		}
+		if m.allNotes != nil {
+			m.allNotes.onNoteActionablesScanned(msg)
 		}
 		return m, nil
 	}
@@ -198,6 +218,13 @@ func (m *App) renderShell() string {
 		body = m.history.renderBody(w, h)
 		actions = m.history.actionHints()
 		info = m.history.infoHints()
+	case pageNotes:
+		if m.allNotes == nil {
+			m.allNotes = newAllNotes(m.store, &m.cfg, m.styles)
+		}
+		body = m.allNotes.renderBody(w, h)
+		actions = m.allNotes.actionHints()
+		info = m.allNotes.infoHints()
 	case pageSettings:
 		if m.settings == nil {
 			path, _ := config.Path()
@@ -245,6 +272,8 @@ func (m *App) shellContentEscLocal() bool {
 		return m.dashboard != nil && m.dashboard.escIsLocal()
 	case pageHistory:
 		return m.history != nil && m.history.escIsLocal()
+	case pageNotes:
+		return m.allNotes != nil && m.allNotes.escIsLocal()
 	case pageSettings:
 		return m.settings != nil && m.settings.escIsLocal()
 	}
@@ -317,6 +346,11 @@ func (m *App) updateShell(msg tea.Msg) tea.Cmd {
 			m.history = newHistory(m.store, m.styles)
 		}
 		return m.history.update(msg)
+	case pageNotes:
+		if m.allNotes == nil {
+			m.allNotes = newAllNotes(m.store, &m.cfg, m.styles)
+		}
+		return m.allNotes.update(msg)
 	case pageSettings:
 		if m.settings == nil {
 			path, _ := config.Path()
@@ -380,6 +414,7 @@ func (m *App) connect(sess store.Session, ensure func(int64) (*session.Client, e
 	m.zone = newZone(m.store, client, m.styles, &m.cfg, snap)
 	if m.cfg.ResumeNotesSessionID == sess.ID {
 		m.zone.openNotes()
+		m.zone.deferActionableScan = true
 		m.cfg.ResumeNotesSessionID = 0
 		_ = m.cfg.Save()
 	}

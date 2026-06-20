@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ const (
 	pageWork shellPage = iota
 	pageStats
 	pageHistory
+	pageNotes
 	pageSettings
 )
 
@@ -27,6 +29,7 @@ var shellNavItems = []shellNavItem{
 	{label: "Work", desc: "projects & tasks"},
 	{label: "Stats", desc: "focus overview"},
 	{label: "History", desc: "session log"},
+	{label: "Notes", desc: "all session notes"},
 	{label: "Config", desc: "settings file"},
 }
 
@@ -34,8 +37,8 @@ var shellNavItems = []shellNavItem{
 type shell struct {
 	styles Styles
 	page   shellPage
-	navIdx int  // cursor in page nav
-	focusNav bool // true = page nav, false = content
+	navIdx int  // cursor in page switcher
+	focusNav bool // true = transient page switcher open
 
 	width, height int
 	clock         time.Time
@@ -70,15 +73,26 @@ func (sh *shell) updateNav(msg tea.KeyPressMsg) tea.Cmd {
 	case "right", "l", "down", "j":
 		sh.navIdx = clampInt(sh.navIdx+1, 0, len(shellNavItems)-1)
 	case "enter", " ", "space":
-		next := shellPage(sh.navIdx)
-		sh.focusNav = false
-		if next != sh.page {
-			sh.page = next
-			return sh.pageCmd()
-		}
-		return nil
+		return sh.selectPage(shellPage(sh.navIdx))
 	case "tab":
 		sh.focusNav = false
+	default:
+		if k := msg.String(); len(k) == 1 && k[0] >= '1' && k[0] <= '9' {
+			idx := int(k[0] - '1')
+			if idx < len(shellNavItems) {
+				return sh.selectPage(shellPage(idx))
+			}
+		}
+	}
+	return nil
+}
+
+func (sh *shell) selectPage(next shellPage) tea.Cmd {
+	sh.navIdx = int(next)
+	sh.focusNav = false
+	if next != sh.page {
+		sh.page = next
+		return sh.pageCmd()
 	}
 	return nil
 }
@@ -89,6 +103,8 @@ func (sh *shell) pageCmd() tea.Cmd {
 		return func() tea.Msg { return gotoStatsMsg{} }
 	case pageHistory:
 		return func() tea.Msg { return gotoHistoryMsg{} }
+	case pageNotes:
+		return func() tea.Msg { return gotoNotesMsg{} }
 	case pageSettings:
 		return func() tea.Msg { return gotoSettingsMsg{} }
 	default:
@@ -127,8 +143,8 @@ func (sh *shell) toggleFocus() {
 }
 
 func (sh *shell) chromeRows() int {
-	// action bar + page nav + bottom info bar (approximate).
-	return 5
+	// top bar + bottom info bar (approximate).
+	return 4
 }
 
 func (sh *shell) contentSize() (int, int) {
@@ -149,21 +165,24 @@ func (sh *shell) render(body string, actionHints, infoHints []string, cfg config
 	}
 	s := sh.styles
 
-	allActions := append(sh.globalActionHints(), actionHints...)
-	actionBar := renderActionBar(s, allActions, sh.width)
-	navStrip := sh.renderNavStrip()
+	var topBar string
+	if sh.focusNav {
+		topBar = sh.renderPageSwitcherBar()
+	} else {
+		allActions := append(sh.globalActionHints(), actionHints...)
+		topBar = renderActionBar(s, allActions, sh.width)
+	}
+
 	info := append(sh.globalInfoHints(cfg), infoHints...)
 	bottomBar := renderInfoBar(s, info, sh.width)
 
-	return composeShellLayout(actionBar, navStrip, body, bottomBar, sh.width, sh.height)
+	return composeChrome(topBar, body, bottomBar, sh.width, sh.height)
 }
 
 func (sh *shell) globalActionHints() []string {
 	s := sh.styles
 	return []string{
-		s.helpEntry("tab", "pages/content"),
-		s.helpEntry("←→", "pages"),
-		s.helpEntry("enter", "open"),
+		s.helpEntry("tab", "pages"),
 		s.helpEntry("esc", sh.escHint()),
 	}
 }
@@ -172,6 +191,7 @@ func (sh *shell) globalInfoHints(cfg config.Config) []string {
 	s := sh.styles
 	hints := []string{
 		s.Title.Render("ZONE"),
+		s.StatValue.Render(shellPageTitle(sh.page)),
 		renderLLMStatus(s, cfg),
 	}
 	if !sh.clock.IsZero() {
@@ -190,34 +210,36 @@ func (sh *shell) escHint() string {
 	return "quit"
 }
 
-func (sh *shell) renderNavStrip() string {
+func (sh *shell) renderPageSwitcherBar() string {
 	s := sh.styles
 	sep := s.Dim.Render("   ")
 	var tabs []string
 	for i, item := range shellNavItems {
-		label := item.label
+		label := fmt.Sprintf("%d:%s", i+1, item.label)
 		switch {
-		case sh.focusNav && i == sh.navIdx:
-			label = s.ItemSel.Render(" "+item.label+" ")
+		case i == sh.navIdx:
+			label = s.ItemSel.Render(" "+label+" ")
 		case shellPage(i) == sh.page:
-			label = s.Item.Render("[" + item.label + "]")
+			label = s.Item.Render(label)
 		default:
-			label = s.Dim.Render(item.label)
+			label = s.Dim.Render(label)
 		}
 		tabs = append(tabs, label)
 	}
-	line := strings.Join(tabs, sep)
-	if sh.focusNav {
-		line += "  " + s.Dim.Render("— "+shellNavItems[sh.navIdx].desc)
+	pages := strings.Join(tabs, sep) + "  " + s.Dim.Render("— "+shellNavItems[sh.navIdx].desc)
+	hints := []string{
+		s.helpEntry("←→", "move"),
+		s.helpEntry("enter", "open"),
+		s.helpEntry("1-"+fmt.Sprintf("%d", len(shellNavItems)), "jump"),
+		s.helpEntry("tab/esc", "close"),
 	}
-
-	style := lipgloss.NewStyle().Width(sh.width)
-	if sh.focusNav {
-		style = style.
-			Border(lipgloss.NormalBorder(), false, false, true, false).
-			BorderForeground(colAccent)
-	}
-	return style.Render(line)
+	controls := wrapHints(hints, s.Dim.Render(chromeSep), sh.width)
+	content := pages + "\n" + controls
+	return lipgloss.NewStyle().
+		Width(sh.width).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(colAccent).
+		Render(content)
 }
 
 func (sh *shell) setStatus(hasActive bool, activeTask, activeProj string, tracking bool) {

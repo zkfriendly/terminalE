@@ -70,6 +70,10 @@ func migrate(database *sql.DB) error {
 		`ALTER TABLE sessions ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE session_notes ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE session_notes ADD COLUMN emoji TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_notes ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE session_notes ADD COLUMN actionables_scanned_at INTEGER`,
+		`ALTER TABLE session_notes ADD COLUMN has_actionables INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE session_notes ADD COLUMN actionables_scan_version INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, q := range alters {
 		if _, err := database.Exec(q); err != nil {
@@ -78,6 +82,9 @@ func migrate(database *sql.DB) error {
 			}
 			return err
 		}
+	}
+	if _, err := database.Exec(`UPDATE session_notes SET updated_at = created_at WHERE updated_at = 0`); err != nil {
+		return err
 	}
 	return makeSessionTaskNullable(database)
 }

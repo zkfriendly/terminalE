@@ -57,11 +57,15 @@ CREATE INDEX IF NOT EXISTS idx_entries_started ON entries(started_at);
 CREATE INDEX IF NOT EXISTS idx_entries_kind    ON entries(kind);
 
 CREATE TABLE IF NOT EXISTS session_notes (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    body       TEXT    NOT NULL,
-    title      TEXT    NOT NULL DEFAULT '',
-    emoji      TEXT    NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id            INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    body                  TEXT    NOT NULL,
+    title                 TEXT    NOT NULL DEFAULT '',
+    emoji                 TEXT    NOT NULL DEFAULT '',
+    created_at            INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at            INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    actionables_scanned_at INTEGER,
+    has_actionables       INTEGER NOT NULL DEFAULT 0,
+    actionables_scan_version INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_session_notes_session ON session_notes(session_id);

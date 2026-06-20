@@ -26,10 +26,15 @@ func (z *zoneView) openNotes() {
 }
 
 func (z *zoneView) reloadNotes() {
-	if z.store == nil || z.snap.SessionID == 0 {
+	if z.store == nil {
 		return
 	}
-	z.notes, _ = z.store.ListSessionNotes(z.snap.SessionID)
+	notes, _ := z.store.ListAllNotes(1000)
+	z.noteRows = buildNoteBrowseRows(notes)
+}
+
+func (z *zoneView) notePickerTotalRows() int {
+	return len(z.noteRows) + 1 // row 0 = "+ new note"
 }
 
 func (z *zoneView) noteEditorWidth() int {
@@ -64,9 +69,8 @@ func (z *zoneView) notePanelHeight() int {
 	return h
 }
 
-// notePickerListHeight is how many note rows fit in the browse panel.
 func (z *zoneView) notePickerListHeight() int {
-	h := z.notePanelHeight() - 6 // title, spacing, padding
+	h := z.notePanelHeight() - 6
 	if z.noteLabelErr != "" {
 		h -= 2
 	}
@@ -78,7 +82,7 @@ func (z *zoneView) notePickerListHeight() int {
 
 func (z *zoneView) ensureNotePickVisible() {
 	listH := z.notePickerListHeight()
-	n := len(z.notes) + 1
+	n := z.notePickerTotalRows()
 	if z.notePickIdx < z.notePickOffset {
 		z.notePickOffset = z.notePickIdx
 	}
@@ -100,44 +104,50 @@ func (z *zoneView) saveNoteDraft() tea.Cmd {
 		return nil
 	}
 	var id int64
+	skipLabel := false
 	if z.editingNoteID != 0 {
 		n, err := z.store.UpdateSessionNote(z.editingNoteID, body)
 		if err != nil {
 			return nil
 		}
 		id = n.ID
-		for i := range z.notes {
-			if z.notes[i].ID == n.ID {
-				z.notes[i] = n
-				break
-			}
-		}
-		if n.Title != "" {
-			return nil
-		}
+		updateNoteBrowseRow(z.noteRows, n)
+		skipLabel = n.Title != ""
 	} else {
 		n, err := z.store.AddSessionNote(z.snap.SessionID, body)
 		if err != nil {
 			return nil
 		}
 		id = n.ID
-		z.notes = append([]store.SessionNote{n}, z.notes...)
 		z.editingNoteID = n.ID
+		z.reloadNotes()
 	}
-	return z.scheduleNoteLabel(id, body)
+	return z.notePostSaveCmds(id, body, skipLabel)
+}
+
+func (z *zoneView) notePostSaveCmds(noteID int64, body string, skipLabel bool) tea.Cmd {
+	var cmds []tea.Cmd
+	if !skipLabel {
+		if cmd := z.scheduleNoteLabel(noteID, body); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if cmd := z.scheduleNoteActionableScan(noteID, body); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
+}
+
+func (z *zoneView) scheduleNoteActionableScan(noteID int64, body string) tea.Cmd {
+	return scanNoteActionablesCmd(z.cfg, z.scanningActionables, noteID, body)
+}
+
+func (z *zoneView) scanPendingActionablesCmd() tea.Cmd {
+	return scanPendingActionablesCmd(z.cfg, z.scanningActionables, noteBrowseNotes(z.noteRows))
 }
 
 func (z *zoneView) labelStatusErr() error {
-	if z.cfg == nil {
-		return fmt.Errorf("labeling unavailable (config missing)")
-	}
-	if !z.cfg.LMStudioEnabled {
-		return fmt.Errorf("LM Studio labeling disabled — set lm_studio_enabled to true in config.json")
-	}
-	if z.cfg.LMStudioURL == "" {
-		return fmt.Errorf("lm_studio_url is empty in config.json")
-	}
-	return nil
+	return noteLabelStatusErr(z.cfg)
 }
 
 func (z *zoneView) labelErrorMsg(noteID int64, err error) tea.Msg {
@@ -181,7 +191,11 @@ func (z *zoneView) enrichNoteCmd(noteID int64, body string) tea.Cmd {
 
 func (z *zoneView) enrichPendingCmd() tea.Cmd {
 	var cmds []tea.Cmd
-	for _, n := range z.notes {
+	for _, row := range z.noteRows {
+		if row.kind != noteRowNote {
+			continue
+		}
+		n := row.note.SessionNote
 		if n.Title != "" || strings.TrimSpace(n.Body) == "" || z.enrichingNotes[n.ID] {
 			continue
 		}
@@ -199,12 +213,7 @@ func (z *zoneView) persistNoteMeta(noteID int64, title, emoji string) {
 		z.noteLabelErr = err.Error()
 		return
 	}
-	for i := range z.notes {
-		if z.notes[i].ID == noteID {
-			z.notes[i] = n
-			return
-		}
-	}
+	updateNoteBrowseRow(z.noteRows, n)
 }
 
 func (z *zoneView) onNoteEnriched(msg noteEnrichedMsg) {
@@ -220,28 +229,49 @@ func (z *zoneView) onNoteEnriched(msg noteEnrichedMsg) {
 	z.persistNoteMeta(msg.noteID, msg.note.Title, msg.note.Emoji)
 }
 
-func (z *zoneView) revertNoteEditor() {
-	if z.editingNoteID != 0 {
-		for _, n := range z.notes {
-			if n.ID == z.editingNoteID {
-				z.noteEditor.Load(n.Body)
-				return
-			}
+func (z *zoneView) onNoteActionablesScanned(msg noteActionablesScannedMsg) {
+	delete(z.scanningActionables, msg.noteID)
+	if msg.err != nil || z.store == nil {
+		return
+	}
+	n, err := z.store.SetSessionNoteActionableScan(msg.noteID, msg.hasActionables)
+	if err != nil {
+		return
+	}
+	updateNoteBrowseRow(z.noteRows, n)
+}
+
+func (z *zoneView) zoneEditingNote() (store.GlobalNote, bool) {
+	for _, row := range z.noteRows {
+		if row.kind == noteRowNote && row.note.ID == z.editingNoteID {
+			return row.note, true
 		}
 	}
+	return store.GlobalNote{}, false
+}
+
+func (z *zoneView) revertNoteEditor() {
+	if body := z.noteRowBody(z.editingNoteID); body != "" {
+		z.noteEditor.Load(body)
+		return
+	}
 	z.noteEditor.Reset()
+}
+
+func (z *zoneView) noteRowBody(noteID int64) string {
+	for _, row := range z.noteRows {
+		if row.kind == noteRowNote && row.note.ID == noteID {
+			return row.note.Body
+		}
+	}
+	return ""
 }
 
 func (z *zoneView) noteSavedBody() string {
 	if z.editingNoteID == 0 {
 		return ""
 	}
-	for _, n := range z.notes {
-		if n.ID == z.editingNoteID {
-			return n.Body
-		}
-	}
-	return ""
+	return z.noteRowBody(z.editingNoteID)
 }
 
 func (z *zoneView) noteIsDirty() bool {
@@ -254,7 +284,7 @@ func (z *zoneView) tryBrowseNotes() tea.Cmd {
 	}
 	z.revertNoteEditor()
 	z.openNotePicker()
-	return z.enrichPendingCmd()
+	return tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
 }
 
 func (z *zoneView) newNote() {
@@ -272,12 +302,10 @@ func (z *zoneView) loadNote(n store.SessionNote) {
 }
 
 func (z *zoneView) openNotePicker() {
-	z.notePickIdx = 0
-	for i, n := range z.notes {
-		if n.ID == z.editingNoteID {
-			z.notePickIdx = i + 1 // +1 for the "new note" row
-			break
-		}
+	if z.editingNoteID != 0 {
+		z.notePickIdx = notePickIdxForNote(z.noteRows, z.editingNoteID)
+	} else {
+		z.notePickIdx = 0
 	}
 	z.notePickOffset = 0
 	z.ensureNotePickVisible()
@@ -301,20 +329,21 @@ func (z *zoneView) closeNotes(save bool) {
 }
 
 func (z *zoneView) deleteSelectedNote() {
-	if z.store == nil || z.notePickIdx == 0 {
+	note, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx)
+	if !ok || z.store == nil {
 		return
 	}
-	note := z.notes[z.notePickIdx-1]
 	if err := z.store.DeleteSessionNote(note.ID); err != nil {
 		return
 	}
 	delete(z.enrichingNotes, note.ID)
+	delete(z.scanningActionables, note.ID)
 	if z.editingNoteID == note.ID {
 		z.editingNoteID = 0
 	}
-	z.notes = append(z.notes[:z.notePickIdx-1], z.notes[z.notePickIdx:]...)
-	if z.notePickIdx > len(z.notes) {
-		z.notePickIdx = len(z.notes)
+	z.reloadNotes()
+	if z.notePickIdx > z.notePickerTotalRows()-1 {
+		z.notePickIdx = max(0, z.notePickerTotalRows()-1)
 	}
 	z.ensureNotePickVisible()
 }
@@ -334,7 +363,7 @@ func (z *zoneView) handleNotesKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch act {
 	case noteActSave:
 		saveCmd = z.saveNoteDraft()
-		pendingCmd := z.enrichPendingCmd()
+		pendingCmd := tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
 		if saveCmd != nil || pendingCmd != nil {
 			return tea.Batch(cmd, saveCmd, pendingCmd)
 		}
@@ -343,10 +372,11 @@ func (z *zoneView) handleNotesKey(msg tea.KeyPressMsg) tea.Cmd {
 		z.noteEditor.Blur()
 		z.noteEditor.Reset()
 		z.openNotePicker()
+		pendingCmd := tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
 		if saveCmd != nil {
-			return tea.Batch(cmd, saveCmd, z.enrichPendingCmd())
+			return tea.Batch(cmd, saveCmd, pendingCmd)
 		}
-		return tea.Batch(cmd, z.enrichPendingCmd())
+		return tea.Batch(cmd, pendingCmd)
 	case noteActQuit:
 		z.closeNotes(false)
 	case noteActBrowse:
@@ -374,26 +404,25 @@ func (z *zoneView) handleNotePickerKey(key string) tea.Cmd {
 		return nil
 	}
 
-	n := len(z.notes) + 1 // row 0 = new note
 	switch key {
 	case "up", "k":
-		z.notePickIdx = clampInt(z.notePickIdx-1, 0, n-1)
+		z.notePickIdx = moveNotePickIdx(z.noteRows, z.notePickIdx, -1)
 		z.ensureNotePickVisible()
 	case "down", "j":
-		z.notePickIdx = clampInt(z.notePickIdx+1, 0, n-1)
+		z.notePickIdx = moveNotePickIdx(z.noteRows, z.notePickIdx, 1)
 		z.ensureNotePickVisible()
 	case "enter", " ", "space":
 		if z.notePickIdx == 0 {
 			z.newNote()
-		} else {
-			z.loadNote(z.notes[z.notePickIdx-1])
+		} else if note, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx); ok {
+			z.loadNote(note.SessionNote)
 		}
 	case "esc":
 		z.closeNotes(false)
 	case "n":
 		z.newNote()
 	case "d":
-		if z.notePickIdx > 0 {
+		if _, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx); ok {
 			z.confirmingNoteDelete = true
 		}
 	}
@@ -401,8 +430,6 @@ func (z *zoneView) handleNotePickerKey(key string) tea.Cmd {
 }
 
 func (z *zoneView) renderNotes(width, height int) string {
-	// Keep the editor sized to the current terminal so it grows/shrinks
-	// with window resizes that happen while notes are open.
 	z.noteEditor.Resize(z.noteEditorWidth(), z.noteEditorHeight())
 	if z.notePicking {
 		z.ensureNotePickVisible()
@@ -411,25 +438,12 @@ func (z *zoneView) renderNotes(width, height int) string {
 	return z.renderNoteEditor(width, height)
 }
 
-func noteListLabel(n store.SessionNote, pending bool, width int, s Styles) string {
-	when := n.CreatedAt.Format("15:04")
-	if pending {
-		return s.Dim.Render(when) + "  " + s.Dim.Render("… labeling")
-	}
-	if n.Title != "" {
-		head := n.Emoji + " " + n.Title
-		return s.Dim.Render(when) + "  " + truncate(head, width-16)
-	}
-	return s.Dim.Render(when) + "  " + lipgloss.NewStyle().Foreground(colRed).Render("unlabeled")
-}
-
 func (z *zoneView) noteActionHints() []string {
 	s := z.styles
 	if z.notePicking {
 		if z.confirmingNoteDelete {
 			label := "this note"
-			if z.notePickIdx > 0 {
-				n := z.notes[z.notePickIdx-1]
+			if n, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx); ok {
 				if n.Title != "" {
 					label = n.Emoji + " " + n.Title
 				} else {
@@ -468,12 +482,13 @@ func (z *zoneView) noteInfoHints() []string {
 	}
 	if z.notePicking {
 		listH := z.notePickerListHeight()
-		total := len(z.notes) + 1
+		total := z.notePickerTotalRows()
+		count := noteBrowseNoteCount(z.noteRows)
 		if total > listH {
-			return []string{s.Dim.Render(fmt.Sprintf("%d–%d of %d notes",
-				z.notePickOffset+1, min(z.notePickOffset+listH, total), total))}
+			return []string{s.Dim.Render(fmt.Sprintf("%d notes  ·  showing %d–%d rows",
+				count, z.notePickOffset+1, min(z.notePickOffset+listH, total)))}
 		}
-		return []string{s.Dim.Render(fmt.Sprintf("%d notes", len(z.notes)))}
+		return []string{s.Dim.Render(fmt.Sprintf("%d notes", count))}
 	}
 	var hints []string
 	hints = append(hints, modeStyle(z.noteEditor.mode, s).Render(z.noteEditor.ModeLabel()))
@@ -492,20 +507,17 @@ func (z *zoneView) renderNoteEditor(width, height int) string {
 	s := z.styles
 	accent := lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 
-	title := accent.Render("session notes")
-	if z.editingNoteID != 0 {
+	title := accent.Render("notes")
+	if n, ok := z.zoneEditingNote(); ok {
+		task := sessionTaskLabel(n.TaskTitle, n.ProjectName)
+		title += s.Dim.Render("  ·  ") + s.Subtitle.Render(task)
 		sub := "editing"
-		for _, n := range z.notes {
-			if n.ID == z.editingNoteID {
-				if n.Title != "" {
-					sub = n.Emoji + " " + n.Title
-				} else if z.enrichingNotes[n.ID] {
-					sub = "labeling…"
-				} else {
-					sub = "unlabeled"
-				}
-				break
-			}
+		if n.Title != "" {
+			sub = n.Emoji + " " + n.Title
+		} else if z.enrichingNotes[n.ID] {
+			sub = "labeling…"
+		} else {
+			sub = "unlabeled"
 		}
 		if strings.Contains(sub, " ") && !strings.HasSuffix(sub, "…") {
 			title += "  " + s.StatValue.Render(sub)
@@ -526,45 +538,33 @@ func (z *zoneView) renderNoteEditor(width, height int) string {
 }
 
 func (z *zoneView) renderNotePickerRow(row, innerW int, s Styles) string {
-	marker := func(active bool) string {
-		if active {
-			return s.Work.Render("● ")
-		}
-		return "  "
-	}
 	if row == 0 {
-		return marker(z.notePickIdx == 0) + s.Item.Render("+ new note")
+		return notePickerMarker(z.notePickIdx == 0, s) + s.Item.Render("+ new note")
 	}
-	n := z.notes[row-1]
-	label := noteListLabel(n, z.enrichingNotes[n.ID], innerW, s)
-	if row == z.notePickIdx {
-		plain := label
-		if n.Title != "" {
-			plain = n.Emoji + " " + n.Title
-		} else if z.enrichingNotes[n.ID] {
-			plain = "… labeling"
-		} else {
-			plain = "unlabeled"
-		}
-		return marker(true) + s.ItemSel.Render(" "+plain+" ")
+	browseRow := z.noteRows[row-1]
+	switch browseRow.kind {
+	case noteRowSession:
+		return renderSessionDivider(browseRow.session, innerW, s)
+	default:
+		n := browseRow.note.SessionNote
+		selected := row == z.notePickIdx
+		editing := n.ID == z.editingNoteID
+		pendingLabel := z.enrichingNotes[n.ID]
+		pendingScan := z.scanningActionables[n.ID]
+		return renderNoteBrowseLine(n, selected, editing, pendingLabel, pendingScan, innerW, s)
 	}
-	cur := ""
-	if n.ID == z.editingNoteID {
-		cur = s.Work.Render("● ")
-	}
-	return cur + label
 }
 
 func (z *zoneView) renderNotePicker(width, height int) string {
 	s := z.styles
 	panelW := z.notePanelWidth()
 	panelH := z.notePanelHeight()
-	innerW := panelW - 4 // horizontal padding
+	innerW := panelW - 4
 	if innerW < 20 {
 		innerW = 20
 	}
 	listH := z.notePickerListHeight()
-	total := len(z.notes) + 1
+	total := z.notePickerTotalRows()
 
 	var lines []string
 	lines = append(lines, s.PaneTitle.Render("Open note"), "")
@@ -604,6 +604,7 @@ func renderNotesReadOnly(notes []store.SessionNote, width, height int, s Styles)
 		} else {
 			head = when + "  " + lipgloss.NewStyle().Foreground(colRed).Render("unlabeled")
 		}
+		head += noteActionableSuffix(n, false, s)
 		lines = append(lines, s.Dim.Render(head))
 		for _, line := range strings.Split(n.Body, "\n") {
 			lines = append(lines, "  "+line)

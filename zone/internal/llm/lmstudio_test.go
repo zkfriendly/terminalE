@@ -3,6 +3,7 @@ package llm
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,90 @@ func TestParseNoteMetaTitleFirst(t *testing.T) {
 	}
 	if meta.Emoji != "☕" || meta.Title != "Coffee break" {
 		t.Fatalf("unexpected: %+v", meta)
+	}
+}
+
+func TestParseActionablesReasoningEcho(t *testing.T) {
+	// Reasoning models echo the prompt template and can hit token limits before
+	// emitting a final content field. The parser must not pick the template's
+	// trailing false example over the model's true conclusion.
+	text := `3.  **Determine Output:**
+   - {"has_actionables": true}
+   Check constraints: "Reply with ONLY one JSON object: {"has_actionables": true} or {"has_actionables": false}"`
+	has, err := parseActionablesResult(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has {
+		t.Fatal("expected true from reasoning conclusion, not template echo")
+	}
+}
+
+func TestParseActionablesBacktickTemplateEcho(t *testing.T) {
+	// Qwen3 reasoning often echoes the allowed answers with backticks, which
+	// must not be treated as the model's false conclusion when truncated.
+	text := `1.  **Analyze User Input:**
+   - Output format: ONLY raw JSON ` + "`{\"has_actionables\": true}` or `{\"has_actionables\": false}`.\n\n2.  **Evaluate against Criteria:**\n   - Matches TRUE criteria.\n\n"
+	has, err := parseActionablesResult(text)
+	if err == nil && !has {
+		t.Fatal("expected error or true, not false from backtick template echo")
+	}
+}
+
+func TestParseActionablesLiveReasoningTruncated(t *testing.T) {
+	// Captured from qwen3.6-35b-a3b on the LLM Task Extraction note (finish_reason=length).
+	text := `3.  **Determine Output:**
+   - {"has_actionables": true}
+
+4.  **Format Output:**
+   - Must be ONLY raw JSON. No extra text.
+   - {"has_actionables": true} matches requirement.
+
+   Check constraints: "Reply with ONLY one JSON object: {"has_actionables": true} or {"has_actionables": false}"`
+	has, err := parseActionablesResult(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has {
+		t.Fatal("expected true for LLM task extraction note reasoning")
+	}
+}
+
+func TestParseActionablesPromptIncludesExamples(t *testing.T) {
+	prompt := actionablesPrompt("sample note")
+	for _, want := range []string{
+		"I want to add a feature",
+		"we need to fix that so users know to scroll",
+		"what hardware would I need",
+		"This is fun",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing example %q", want)
+		}
+	}
+}
+
+func TestDetectActionables(t *testing.T) {
+	ResetModelCache()
+	ResetStats()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"has_actionables\": true}"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	has, err := DetectActionables(srv.URL, "", "todo: refactor the buffer abstraction")
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if !has {
+		t.Fatal("expected actionables")
 	}
 }
 

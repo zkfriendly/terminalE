@@ -47,6 +47,54 @@ func keyPress(s string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r[0], Text: s}
 }
 
+func noteEnrichedFromCmd(t *testing.T, cmd tea.Cmd) noteEnrichedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected cmd")
+	}
+	switch msg := cmd().(type) {
+	case noteEnrichedMsg:
+		return msg
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if sub == nil {
+				continue
+			}
+			if enriched, ok := sub().(noteEnrichedMsg); ok {
+				return enriched
+			}
+		}
+		t.Fatalf("no noteEnrichedMsg in batch")
+	default:
+		t.Fatalf("unexpected msg type %T", msg)
+	}
+	return noteEnrichedMsg{}
+}
+
+func noteActionablesFromCmd(t *testing.T, cmd tea.Cmd) noteActionablesScannedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected cmd")
+	}
+	switch msg := cmd().(type) {
+	case noteActionablesScannedMsg:
+		return msg
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if sub == nil {
+				continue
+			}
+			if scanned, ok := sub().(noteActionablesScannedMsg); ok {
+				return scanned
+			}
+		}
+		t.Fatalf("no noteActionablesScannedMsg in batch")
+	default:
+		t.Fatalf("unexpected msg type %T", msg)
+	}
+	return noteActionablesScannedMsg{}
+}
+
 func TestDashboardRenders(t *testing.T) {
 	app, st := newTestApp(t)
 	p, _ := st.CreateProject("Demo", "")
@@ -58,8 +106,45 @@ func TestDashboardRenders(t *testing.T) {
 	if !strings.Contains(out.Content, "ZONE") || !strings.Contains(out.Content, "First task") {
 		t.Fatalf("dashboard render missing content:\n%s", out.Content)
 	}
-	if !strings.Contains(out.Content, "Stats") || !strings.Contains(out.Content, "History") {
-		t.Fatal("expected top nav tabs")
+	if !strings.Contains(out.Content, "Work") {
+		t.Fatal("expected current page in bottom info bar")
+	}
+	if strings.Contains(out.Content, "1:Stats") {
+		t.Fatal("page switcher should not be visible by default")
+	}
+}
+
+func TestPageSwitcherOpensOnTab(t *testing.T) {
+	app, _ := newTestApp(t)
+	sizeApp(app)
+
+	_, cmd := app.Update(keyPress("tab"))
+	if cmd != nil {
+		app.Update(cmd())
+	}
+	if !app.shell.focusNav {
+		t.Fatal("tab should open page switcher")
+	}
+	out := app.View().Content
+	for _, want := range []string{"1:Work", "2:Stats", "3:History", "4:Notes", "5:Config"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("page switcher missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "←→") || strings.Contains(out, "column") {
+		t.Fatalf("top bar should show page switcher controls, not work actions:\n%s", out)
+	}
+
+	app.Update(keyPress("right"))
+	if app.shell.navIdx != int(pageStats) {
+		t.Fatalf("expected stats selected in switcher, got %d", app.shell.navIdx)
+	}
+	app.Update(keyPress("enter"))
+	if app.shell.page != pageStats {
+		t.Fatal("enter should navigate to stats")
+	}
+	if app.shell.focusNav {
+		t.Fatal("switcher should close after selecting a page")
 	}
 }
 
@@ -75,8 +160,8 @@ func TestDashboardShowsActiveSessionBanner(t *testing.T) {
 	if !app.dashboard.hasActive {
 		t.Fatal("expected dashboard to detect the active session")
 	}
-	if !strings.Contains(app.View().Content, "focus session running") {
-		t.Fatal("expected running-session banner")
+	if !strings.Contains(app.View().Content, "● focus session") {
+		t.Fatal("expected active session in bottom info bar")
 	}
 }
 
@@ -98,8 +183,11 @@ func TestDashboardShowsResumeBanner(t *testing.T) {
 		t.Fatal("expected resume to be available for an abandoned session")
 	}
 	out := app.View().Content
-	if !strings.Contains(out, "ended early") || !strings.Contains(out, "Half-done") {
-		t.Fatalf("expected resume banner:\n%s", out)
+	if !strings.Contains(out, "resume available") || !strings.Contains(out, "Half-done") {
+		t.Fatalf("expected resume info in bottom bar:\n%s", out)
+	}
+	if !strings.Contains(out, "project") || !strings.Contains(out, "tasks") {
+		t.Fatalf("expected selected project info in bottom bar:\n%s", out)
 	}
 
 	// Resume last session with R.
@@ -241,7 +329,7 @@ func TestNavFocusDoesNotMoveDashboard(t *testing.T) {
 		t.Fatalf("expected nav to move to stats, got idx %d", app.shell.navIdx)
 	}
 	if app.dashboard.pane != beforePane {
-		t.Fatalf("nav right should not switch dashboard pane (was %d, now %d)", beforePane, app.dashboard.pane)
+		t.Fatalf("page switcher right should not switch dashboard column (was %d, now %d)", beforePane, app.dashboard.pane)
 	}
 	if app.dashboard.selProj != beforeProj {
 		t.Fatalf("nav right should not move project selection (was %d, now %d)", beforeProj, app.dashboard.selProj)
@@ -323,6 +411,47 @@ func TestSettingsView(t *testing.T) {
 	}
 }
 
+func TestAllNotesRenders(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Deep work")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	st.AddSessionNote(sess.ID, "remember the refactor")
+
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	app.Update(gotoNotesMsg{})
+	if app.shell.page != pageNotes {
+		t.Fatal("expected notes page in shell")
+	}
+	out := app.View().Content
+	for _, want := range []string{"Notes", "Open note", "unlabeled", "Deep work"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("notes render missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestAllNotesEditAndSave(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Deep work")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	note, _ := st.AddSessionNote(sess.ID, "remember the refactor")
+
+	sizeApp(app)
+	app.Update(gotoNotesMsg{})
+	app.Update(keyPress("enter"))
+	if app.allNotes.picking {
+		t.Fatal("enter should open note editor")
+	}
+	app.allNotes.editor.Load("remember the refactor\nupdated")
+	app.allNotes.saveDraft()
+	got, _ := st.GetSessionNote(note.ID)
+	if got.Body != "remember the refactor\nupdated" {
+		t.Fatalf("expected saved body, got %q", got.Body)
+	}
+}
+
 func TestStatsRenders(t *testing.T) {
 	app, st := newTestApp(t)
 	p, _ := st.CreateProject("Demo", "")
@@ -397,7 +526,7 @@ func TestZoneBackgroundReturnsToWork(t *testing.T) {
 		t.Fatal("expected work page after background")
 	}
 	out := app.View().Content
-	if !strings.Contains(out, "Focus") || !strings.Contains(out, "Stats") {
+	if !strings.Contains(out, "Focus") || !strings.Contains(out, "Work") {
 		t.Fatalf("expected dashboard in shell after background:\n%s", out)
 	}
 }
@@ -474,7 +603,7 @@ func TestNotePickerAndEdit(t *testing.T) {
 		t.Fatal("expected note picker on open")
 	}
 
-	z.notePickIdx = 2 // row 0 = new, row 1 = newest ("second note"), row 2 = "first note"
+	z.notePickIdx = 3 // row 0 = new, row 1 = session divider, row 2 = newest, row 3 = "first note"
 	z.handleNotePickerKey("enter")
 	if z.editingNoteID != n1.ID {
 		t.Fatalf("expected to load first note id %d, got %d", n1.ID, z.editingNoteID)
@@ -512,7 +641,7 @@ func TestNoteDeleteConfirmation(t *testing.T) {
 	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{SessionID: sess.ID, Phase: "work"})
 	z.width, z.height = 100, 40
 	z.openNotes()
-	z.notePickIdx = 1 // newest = "delete me"
+	z.notePickIdx = 2 // row 0 = new, row 1 = session divider, row 2 = newest ("delete me")
 
 	z.handleNotePickerKey("d")
 	if !z.confirmingNoteDelete {
@@ -564,7 +693,7 @@ func TestNoteLabelDisabledLeavesUnlabeled(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected label cmd after save")
 	}
-	msg := cmd().(noteEnrichedMsg)
+	msg := noteEnrichedFromCmd(t, cmd)
 	z.onNoteEnriched(msg)
 
 	if z.noteLabelErr == "" {
@@ -614,7 +743,7 @@ func TestNoteSaveTriggersEnrich(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected enrich cmd after save")
 	}
-	msg := cmd().(noteEnrichedMsg)
+	msg := noteEnrichedFromCmd(t, cmd)
 	z.onNoteEnriched(msg)
 
 	notes, _ := st.ListSessionNotes(sess.ID)
@@ -626,6 +755,53 @@ func TestNoteSaveTriggersEnrich(t *testing.T) {
 	}
 	if z.noteLabelErr != "" {
 		t.Fatalf("unexpected label error: %q", z.noteLabelErr)
+	}
+}
+
+func TestNoteSaveTriggersActionableScan(t *testing.T) {
+	llm.ResetModelCache()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"has_actionables\": true}"}}]}`))
+		}
+	}))
+	defer srv.Close()
+
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+
+	cfg := config.Default()
+	cfg.LMStudioEnabled = true
+	cfg.LMStudioURL = srv.URL
+
+	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.openNotes()
+	z.newNote()
+	z.noteEditor.Load("todo: ship the feature")
+
+	cmd := z.saveNoteDraft()
+	if cmd == nil {
+		t.Fatal("expected scan cmd after save")
+	}
+	msg := noteActionablesFromCmd(t, cmd)
+	z.onNoteActionablesScanned(msg)
+
+	notes, _ := st.ListSessionNotes(sess.ID)
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note, got %d", len(notes))
+	}
+	if !notes[0].HasActionables {
+		t.Fatalf("expected actionable flag, got %+v", notes[0])
+	}
+	z.openNotePicker()
+	out := z.render(100, 40)
+	if !strings.Contains(out, "◆ tasks") {
+		t.Fatalf("expected actionable indicator in picker:\n%s", out)
 	}
 }
 
@@ -660,7 +836,7 @@ func TestNoteEnrichErrorLeavesUnlabeled(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected enrich cmd after save")
 	}
-	msg := cmd().(noteEnrichedMsg)
+	msg := noteEnrichedFromCmd(t, cmd)
 	z.onNoteEnriched(msg)
 
 	if z.noteLabelErr == "" {
@@ -671,7 +847,7 @@ func TestNoteEnrichErrorLeavesUnlabeled(t *testing.T) {
 		t.Fatalf("expected empty label on LLM error, got %+v", notes[0])
 	}
 	z.notePicking = true
-	z.notePickIdx = 1
+	z.notePickIdx = notePickIdxForNote(z.noteRows, notes[0].ID)
 	z.ensureNotePickVisible()
 	out := z.renderNotePicker(100, 40)
 	if !strings.Contains(out, "unlabeled") {

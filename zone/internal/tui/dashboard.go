@@ -376,50 +376,23 @@ func (d *dashboard) renderBody(width, height int) string {
 		return "loading..."
 	}
 
-	var banners []string
-	if d.hasActive {
-		label := d.activeTask
-		if d.activeProj != "" {
-			label += " · " + d.activeProj
-		}
-		banners = append(banners, d.styles.Work.Render("● focus session running")+" "+d.styles.Dim.Render(label))
-	} else if d.canResume {
-		label := d.resumeLabel
-		if d.resumeFocus > 0 {
-			label += "  " + d.styles.Dim.Render("("+formatDur(d.resumeFocus)+" focus)")
-		}
-		banners = append(banners, d.styles.Break.Render("↻ session ended early")+" "+d.styles.Dim.Render(label))
+	projW := width / 4
+	if projW < 16 {
+		projW = 16
+	}
+	if projW > 28 {
+		projW = 28
+	}
+	taskW := width - projW - 1
+	if taskW < 20 {
+		taskW = 20
 	}
 
-	paneW := (width - 2) / 2
-	if paneW < 18 {
-		paneW = 18
-	}
+	projects := d.renderProjects(projW, height)
+	tasks := d.renderTasks(taskW, height)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, projects, tasks)
 
-	bannerH := 0
-	if len(banners) > 0 {
-		bannerH = len(banners)*2 - 1 + 1 // lines + trailing blank
-	}
-	bodyH := height - bannerH
-	if bodyH < 5 {
-		bodyH = 5
-	}
-
-	projects := d.renderProjects(paneW, bodyH)
-	tasks := d.renderTasks(paneW, bodyH)
-	divider := lipgloss.NewStyle().Foreground(colDim).Render("│")
-	body := lipgloss.JoinHorizontal(lipgloss.Top, projects, divider, tasks)
-
-	var parts []string
-	for _, b := range banners {
-		parts = append(parts, b)
-	}
-	if len(parts) > 0 {
-		parts = append(parts, "")
-	}
-	parts = append(parts, body)
-
-	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	out := body
 	if d.err != nil {
 		out = d.styles.Accent.Foreground(colRed).Render("error: "+d.err.Error()) + "\n" + out
 	}
@@ -435,7 +408,7 @@ func (d *dashboard) actionHints() []string {
 	}
 	hints := []string{
 		d.styles.helpEntry("↑↓", "move"),
-		d.styles.helpEntry("←→", "pane"),
+		d.styles.helpEntry("←→", "column"),
 		d.styles.helpEntry("enter/f", "focus"),
 		d.styles.helpEntry("t", "track"),
 		d.styles.helpEntry("n", "new"),
@@ -450,47 +423,85 @@ func (d *dashboard) actionHints() []string {
 }
 
 func (d *dashboard) infoHints() []string {
-	return nil
+	s := d.styles
+	var hints []string
+	if d.hasActive {
+		label := d.activeTask
+		if d.activeProj != "" {
+			label += " · " + d.activeProj
+		}
+		hints = append(hints, s.Work.Render("● focus session")+" "+s.Dim.Render(label))
+	} else if d.canResume {
+		label := d.resumeLabel
+		if d.resumeFocus > 0 {
+			label += " (" + formatDur(d.resumeFocus) + " focus)"
+		}
+		hints = append(hints, s.Break.Render("↻ resume available")+" "+s.Dim.Render(label))
+	}
+	if d.pane == paneProjects {
+		if p, ok := d.currentProject(); ok {
+			hints = append(hints, s.Dim.Render("project")+" "+s.StatValue.Render(p.Name)+
+				s.Dim.Render(fmt.Sprintf(" · %d tasks", len(d.tasks))))
+		}
+	} else if t, ok := d.currentTask(); ok {
+		line := s.Dim.Render("task") + " " + s.StatValue.Render(t.Title)
+		if p, ok := d.currentProject(); ok {
+			line += s.Dim.Render(" · ") + s.Subtitle.Render(p.Name)
+		}
+		total := d.workSecs[t.ID]
+		if d.tracking && d.trackTaskID == t.ID {
+			live := int(d.now.Sub(d.trackStart).Seconds())
+			line += s.Dim.Render(" · ") + s.Work.Render("● REC "+formatClock(live))
+		} else {
+			line += s.Dim.Render(" · ") + s.Dim.Render(formatDur(total))
+		}
+		if t.Status == "done" {
+			line += s.Dim.Render(" · done")
+		}
+		hints = append(hints, line)
+	}
+	return hints
 }
 
 func (d *dashboard) renderProjects(w, h int) string {
-	title := d.renderPaneTitle("Projects", d.pane == paneProjects)
+	title := d.renderColumnTitle("Projects", d.pane == paneProjects)
 	var lines []string
 	if len(d.projects) == 0 {
-		lines = append(lines, d.styles.Dim.Render("no projects yet"))
-		lines = append(lines, d.styles.Dim.Render("press n to create one"))
+		lines = append(lines, d.styles.Dim.Render("no projects"))
+		lines = append(lines, d.styles.Dim.Render("n to create"))
 	}
 	for i, p := range d.projects {
 		dot := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Color)).Render("●")
-		label := fmt.Sprintf("%s %s", dot, p.Name)
+		label := p.Name
 		if i == d.selProj && d.pane == paneProjects {
-			label = d.styles.ItemSel.Render(" " + p.Name + " ")
-			label = dot + " " + label
+			label = d.styles.ItemSel.Render(" "+p.Name+" ")
+		} else if d.pane != paneProjects {
+			label = d.styles.Dim.Render(label)
+		} else {
+			label = d.styles.Item.Render(label)
 		}
-		lines = append(lines, label)
+		lines = append(lines, dot+" "+label)
 	}
 	if d.mode == modeNewProject || d.mode == modeRenameProject {
 		lines = append(lines, "", d.input.View())
 	}
-	content := title + "\n\n" + strings.Join(lines, "\n")
-	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
+	content := title + "\n" + strings.Join(lines, "\n")
+	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1, 0, 0).Render(content)
 }
 
 func (d *dashboard) renderTasks(w, h int) string {
 	heading := "Tasks"
 	if p, ok := d.currentProject(); ok {
-		heading = "Tasks · " + p.Name
+		heading = p.Name
 	}
-	title := d.renderPaneTitle(heading, d.pane == paneTasks)
+	title := d.renderColumnTitle(heading, d.pane == paneTasks)
 
 	var lines []string
-	if len(d.tasks) == 0 {
-		lines = append(lines, d.styles.Dim.Render("no tasks here"))
-		if _, ok := d.currentProject(); ok {
-			lines = append(lines, d.styles.Dim.Render("press n to add one"))
-		} else {
-			lines = append(lines, d.styles.Dim.Render("create a project first"))
-		}
+	if len(d.projects) == 0 {
+		lines = append(lines, d.styles.Dim.Render("create a project first"))
+	} else if len(d.tasks) == 0 {
+		lines = append(lines, d.styles.Dim.Render("no tasks"))
+		lines = append(lines, d.styles.Dim.Render("n to add"))
 	}
 	for i, t := range d.tasks {
 		lines = append(lines, d.renderTaskLine(i, t, w))
@@ -498,11 +509,11 @@ func (d *dashboard) renderTasks(w, h int) string {
 	if d.mode == modeNewTask || d.mode == modeRenameTask {
 		lines = append(lines, "", d.input.View())
 	}
-	content := title + "\n\n" + strings.Join(lines, "\n")
+	content := title + "\n" + strings.Join(lines, "\n")
 	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
 }
 
-func (d *dashboard) renderPaneTitle(label string, active bool) string {
+func (d *dashboard) renderColumnTitle(label string, active bool) string {
 	if active {
 		return d.styles.PaneTitle.Render(label)
 	}
