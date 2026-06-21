@@ -74,6 +74,9 @@ func migrate(database *sql.DB) error {
 		`ALTER TABLE session_notes ADD COLUMN actionables_scanned_at INTEGER`,
 		`ALTER TABLE session_notes ADD COLUMN has_actionables INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE session_notes ADD COLUMN actionables_scan_version INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE session_notes ADD COLUMN actionables_json TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_notes ADD COLUMN actionables_extracted_at INTEGER`,
+		`ALTER TABLE session_notes ADD COLUMN actionables_extract_version INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, q := range alters {
 		if _, err := database.Exec(q); err != nil {

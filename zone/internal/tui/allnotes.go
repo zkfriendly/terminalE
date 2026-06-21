@@ -29,6 +29,13 @@ type allNotesView struct {
 	scanningActionables  map[int64]bool
 	noteLabelErr         string
 	confirmingNoteDelete bool
+
+	viewingActionables    bool
+	actionablesNoteID     int64
+	actionablesTitle      string
+	actionablesItems      []string
+	extractingActionables bool
+	actionablesExtractErr string
 }
 
 func newAllNotes(st *store.Store, cfg *config.Config, s Styles) *allNotesView {
@@ -68,6 +75,9 @@ func (v *allNotesView) reload() {
 func (v *allNotesView) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		if v.viewingActionables {
+			return v.handleActionablesKey(msg.String())
+		}
 		if v.picking {
 			return v.handleBrowseKey(msg.String())
 		}
@@ -110,6 +120,10 @@ func (v *allNotesView) handleBrowseKey(key string) tea.Cmd {
 	case "d":
 		if _, ok := v.selectedNote(); ok {
 			v.confirmingNoteDelete = true
+		}
+	case "t":
+		if n, ok := v.selectedNote(); ok && n.HasActionables {
+			return v.openActionablesPanel(n)
 		}
 	case "r":
 		v.reload()
@@ -327,6 +341,70 @@ func (v *allNotesView) enrichPendingCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (v *allNotesView) onNoteActionablesExtracted(msg noteActionablesExtractedMsg) {
+	onNoteActionablesExtracted(
+		v.store, msg,
+		&v.actionablesNoteID, &v.actionablesItems,
+		&v.extractingActionables, &v.actionablesExtractErr,
+	)
+}
+
+func (v *allNotesView) actionablesNoteBody() string {
+	for _, row := range v.rows {
+		if row.kind == noteRowNote && row.note.ID == v.actionablesNoteID {
+			return row.note.Body
+		}
+	}
+	return ""
+}
+
+func (v *allNotesView) openActionablesPanel(note store.GlobalNote) tea.Cmd {
+	v.viewingActionables = true
+	v.actionablesNoteID = note.ID
+	v.actionablesTitle = noteActionablesTitle(note.SessionNote)
+	v.actionablesItems = nil
+	v.actionablesExtractErr = ""
+	v.extractingActionables = false
+	if v.store != nil {
+		if tasks, ok, err := v.store.LoadSessionNoteActionables(note.ID); err == nil && ok {
+			v.actionablesItems = tasks
+			return nil
+		}
+	}
+	v.extractingActionables = true
+	return extractNoteActionablesCmd(v.cfg, note.ID, note.Body)
+}
+
+func (v *allNotesView) reextractActionables() tea.Cmd {
+	body := v.actionablesNoteBody()
+	if body == "" || v.actionablesNoteID == 0 {
+		return nil
+	}
+	v.actionablesItems = nil
+	v.actionablesExtractErr = ""
+	v.extractingActionables = true
+	return extractNoteActionablesCmd(v.cfg, v.actionablesNoteID, body)
+}
+
+func (v *allNotesView) closeActionablesPanel() {
+	v.viewingActionables = false
+	v.actionablesNoteID = 0
+	v.actionablesTitle = ""
+	v.actionablesItems = nil
+	v.extractingActionables = false
+	v.actionablesExtractErr = ""
+}
+
+func (v *allNotesView) handleActionablesKey(key string) tea.Cmd {
+	switch key {
+	case "esc":
+		v.closeActionablesPanel()
+	case "r":
+		return v.reextractActionables()
+	}
+	return nil
+}
+
 func (v *allNotesView) onNoteActionablesScanned(msg noteActionablesScannedMsg) {
 	delete(v.scanningActionables, msg.noteID)
 	if msg.err != nil || v.store == nil {
@@ -511,6 +589,13 @@ func (v *allNotesView) renderBody(width, height int) string {
 	if width == 0 {
 		return "loading notes..."
 	}
+	if v.viewingActionables {
+		return renderNoteActionablesPanel(
+			v.actionablesTitle, v.actionablesItems,
+			v.extractingActionables, v.actionablesExtractErr,
+			width, height, v.styles,
+		)
+	}
 	if v.picking {
 		v.ensureCursorVisible()
 		return v.renderBrowse(width, height)
@@ -617,6 +702,9 @@ func (v *allNotesView) editingNote() (store.GlobalNote, bool) {
 
 func (v *allNotesView) actionHints() []string {
 	s := v.styles
+	if v.viewingActionables {
+		return noteActionablesActionHints(s)
+	}
 	if v.picking {
 		if v.confirmingNoteDelete {
 			label := "this note"
@@ -633,13 +721,17 @@ func (v *allNotesView) actionHints() []string {
 					s.helpEntry("y", "yes") + s.Dim.Render("  ·  ") + s.helpEntry("n", "no"),
 			}
 		}
-		return []string{
+		hints := []string{
 			s.helpEntry("↑↓", "move"),
 			s.helpEntry("enter", "open"),
 			s.helpEntry("d", "delete"),
 			s.helpEntry("g/G", "top/bottom"),
 			s.helpEntry("r", "refresh"),
 		}
+		if n, ok := v.selectedNote(); ok && n.HasActionables {
+			hints = append(hints, s.helpEntry("t", "tasks"))
+		}
+		return hints
 	}
 	hints := []string{
 		s.helpEntry(":w", "save"),
@@ -683,6 +775,9 @@ func (v *allNotesView) infoHints() []string {
 }
 
 func (v *allNotesView) escIsLocal() bool {
+	if v.viewingActionables {
+		return true
+	}
 	if v.picking {
 		return v.confirmingNoteDelete
 	}

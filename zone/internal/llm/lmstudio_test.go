@@ -154,6 +154,48 @@ func TestParseActionablesPromptIncludesExamples(t *testing.T) {
 	}
 }
 
+func TestParseExtractedTasks(t *testing.T) {
+	tasks, err := parseExtractedTasks(`{"tasks":["Ship feature flag","Fix scroll overflow"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 || tasks[0] != "Ship feature flag" {
+		t.Fatalf("unexpected: %+v", tasks)
+	}
+
+	tasks, err = parseExtractedTasks("Final answer: {\"tasks\": [\"Add prompt sandbox\"]}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0] != "Add prompt sandbox" {
+		t.Fatalf("unexpected: %+v", tasks)
+	}
+}
+
+func TestExtractActionables(t *testing.T) {
+	ResetModelCache()
+	ResetStats()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"tasks\":[\"Add extraction button\",\"Build prompt sandbox\"]}"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	tasks, err := ExtractActionables(srv.URL, "", "todo: add extraction button and prompt sandbox")
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(tasks) != 2 || tasks[0] != "Add extraction button" {
+		t.Fatalf("unexpected tasks: %+v", tasks)
+	}
+}
+
 func TestDetectActionables(t *testing.T) {
 	ResetModelCache()
 	ResetStats()

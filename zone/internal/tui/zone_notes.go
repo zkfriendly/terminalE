@@ -229,6 +229,70 @@ func (z *zoneView) onNoteEnriched(msg noteEnrichedMsg) {
 	z.persistNoteMeta(msg.noteID, msg.note.Title, msg.note.Emoji)
 }
 
+func (z *zoneView) onNoteActionablesExtracted(msg noteActionablesExtractedMsg) {
+	onNoteActionablesExtracted(
+		z.store, msg,
+		&z.actionablesNoteID, &z.actionablesItems,
+		&z.extractingActionables, &z.actionablesExtractErr,
+	)
+}
+
+func (z *zoneView) actionablesNoteBody() string {
+	for _, row := range z.noteRows {
+		if row.kind == noteRowNote && row.note.ID == z.actionablesNoteID {
+			return row.note.Body
+		}
+	}
+	return ""
+}
+
+func (z *zoneView) openActionablesPanel(note store.GlobalNote) tea.Cmd {
+	z.viewingActionables = true
+	z.actionablesNoteID = note.ID
+	z.actionablesTitle = noteActionablesTitle(note.SessionNote)
+	z.actionablesItems = nil
+	z.actionablesExtractErr = ""
+	z.extractingActionables = false
+	if z.store != nil {
+		if tasks, ok, err := z.store.LoadSessionNoteActionables(note.ID); err == nil && ok {
+			z.actionablesItems = tasks
+			return nil
+		}
+	}
+	z.extractingActionables = true
+	return extractNoteActionablesCmd(z.cfg, note.ID, note.Body)
+}
+
+func (z *zoneView) reextractActionables() tea.Cmd {
+	body := z.actionablesNoteBody()
+	if body == "" || z.actionablesNoteID == 0 {
+		return nil
+	}
+	z.actionablesItems = nil
+	z.actionablesExtractErr = ""
+	z.extractingActionables = true
+	return extractNoteActionablesCmd(z.cfg, z.actionablesNoteID, body)
+}
+
+func (z *zoneView) closeActionablesPanel() {
+	z.viewingActionables = false
+	z.actionablesNoteID = 0
+	z.actionablesTitle = ""
+	z.actionablesItems = nil
+	z.extractingActionables = false
+	z.actionablesExtractErr = ""
+}
+
+func (z *zoneView) handleActionablesPanelKey(key string) tea.Cmd {
+	switch key {
+	case "esc":
+		z.closeActionablesPanel()
+	case "r":
+		return z.reextractActionables()
+	}
+	return nil
+}
+
 func (z *zoneView) onNoteActionablesScanned(msg noteActionablesScannedMsg) {
 	delete(z.scanningActionables, msg.noteID)
 	if msg.err != nil || z.store == nil {
@@ -322,6 +386,7 @@ func (z *zoneView) closeNotes(save bool) {
 	z.notePicking = false
 	z.editingNoteID = 0
 	z.confirmingNoteDelete = false
+	z.closeActionablesPanel()
 	if z.cfg != nil {
 		z.cfg.ResumeNotesSessionID = 0
 		_ = z.cfg.Save()
@@ -391,6 +456,9 @@ func (z *zoneView) handleNotesKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (z *zoneView) handleNotePickerKey(key string) tea.Cmd {
+	if z.viewingActionables {
+		return z.handleActionablesPanelKey(key)
+	}
 	if z.confirmingNoteDelete {
 		switch key {
 		case "y", "enter":
@@ -425,12 +493,23 @@ func (z *zoneView) handleNotePickerKey(key string) tea.Cmd {
 		if _, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx); ok {
 			z.confirmingNoteDelete = true
 		}
+	case "t":
+		if note, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx); ok && note.HasActionables {
+			return z.openActionablesPanel(note)
+		}
 	}
 	return nil
 }
 
 func (z *zoneView) renderNotes(width, height int) string {
 	z.noteEditor.Resize(z.noteEditorWidth(), z.noteEditorHeight())
+	if z.viewingActionables {
+		return renderNoteActionablesPanel(
+			z.actionablesTitle, z.actionablesItems,
+			z.extractingActionables, z.actionablesExtractErr,
+			width, height, z.styles,
+		)
+	}
 	if z.notePicking {
 		z.ensureNotePickVisible()
 		return z.renderNotePicker(width, height)
@@ -440,6 +519,9 @@ func (z *zoneView) renderNotes(width, height int) string {
 
 func (z *zoneView) noteActionHints() []string {
 	s := z.styles
+	if z.viewingActionables {
+		return noteActionablesActionHints(s)
+	}
 	if z.notePicking {
 		if z.confirmingNoteDelete {
 			label := "this note"
@@ -456,13 +538,7 @@ func (z *zoneView) noteActionHints() []string {
 					s.helpEntry("y", "yes") + s.Dim.Render("  ·  ") + s.helpEntry("n", "no"),
 			}
 		}
-		return []string{
-			s.helpEntry("↑↓", "move"),
-			s.helpEntry("enter", "open"),
-			s.helpEntry("n", "new"),
-			s.helpEntry("d", "delete"),
-			s.helpEntry("esc", "back"),
-		}
+		return z.notePickerActionHints()
 	}
 	hints := []string{
 		s.helpEntry(":w", "save"),
@@ -471,6 +547,21 @@ func (z *zoneView) noteActionHints() []string {
 	}
 	if !z.noteIsDirty() {
 		hints = append(hints, s.helpEntry(":e/esc", "browse"))
+	}
+	return hints
+}
+
+func (z *zoneView) notePickerActionHints() []string {
+	s := z.styles
+	hints := []string{
+		s.helpEntry("↑↓", "move"),
+		s.helpEntry("enter", "open"),
+		s.helpEntry("n", "new"),
+		s.helpEntry("d", "delete"),
+		s.helpEntry("esc", "back"),
+	}
+	if note, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx); ok && note.HasActionables {
+		hints = append(hints, s.helpEntry("t", "tasks"))
 	}
 	return hints
 }

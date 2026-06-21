@@ -17,8 +17,22 @@ type SessionNote struct {
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	ActionablesScannedAt   *time.Time
-	HasActionables         bool
-	ActionablesScanVersion int
+	HasActionables           bool
+	ActionablesScanVersion   int
+	ActionablesJSON          string
+	ActionablesExtractedAt   *time.Time
+	ActionablesExtractVersion int
+}
+
+// NeedsActionableExtract reports whether cached extracted tasks are stale.
+func (n SessionNote) NeedsActionableExtract() bool {
+	if n.ActionablesExtractedAt == nil || n.ActionablesJSON == "" {
+		return true
+	}
+	if n.ActionablesExtractVersion < llm.ActionablesExtractVersion {
+		return true
+	}
+	return n.ActionablesExtractedAt.Before(n.UpdatedAt)
 }
 
 // NeedsActionableScan reports whether the note body changed since the last scan,
@@ -46,20 +60,22 @@ func scanSessionNote(row interface {
 }) (SessionNote, error) {
 	var n SessionNote
 	var created, updated int64
-	var scanned sql.NullInt64
+	var scanned, extracted sql.NullInt64
 	if err := row.Scan(
 		&n.ID, &n.SessionID, &n.Body, &n.Title, &n.Emoji,
 		&created, &updated, &scanned, &n.HasActionables, &n.ActionablesScanVersion,
+		&n.ActionablesJSON, &extracted, &n.ActionablesExtractVersion,
 	); err != nil {
 		return SessionNote{}, err
 	}
 	n.CreatedAt = toTime(created)
 	n.UpdatedAt = toTime(updated)
 	n.ActionablesScannedAt = toTimePtr(scanned)
+	n.ActionablesExtractedAt = toTimePtr(extracted)
 	return n, nil
 }
 
-const sessionNoteCols = `id, session_id, body, title, emoji, created_at, updated_at, actionables_scanned_at, has_actionables, actionables_scan_version`
+const sessionNoteCols = `id, session_id, body, title, emoji, created_at, updated_at, actionables_scanned_at, has_actionables, actionables_scan_version, actionables_json, actionables_extracted_at, actionables_extract_version`
 
 // AddSessionNote appends a note to a focus session.
 func (s *Store) AddSessionNote(sessionID int64, body string) (SessionNote, error) {
@@ -88,7 +104,8 @@ func (s *Store) UpdateSessionNote(id int64, body string) (SessionNote, error) {
 	_, err := s.db.Exec(
 		`UPDATE session_notes
 		 SET body = ?, updated_at = strftime('%s','now'),
-		     actionables_scanned_at = NULL, has_actionables = 0, actionables_scan_version = 0
+		     actionables_scanned_at = NULL, has_actionables = 0, actionables_scan_version = 0,
+		     actionables_json = '', actionables_extracted_at = NULL, actionables_extract_version = 0
 		 WHERE id = ?`,
 		body, id,
 	)
@@ -165,7 +182,8 @@ func (s *Store) ListAllNotes(limit int) ([]GlobalNote, error) {
 	rows, err := s.db.Query(`
 		SELECT sn.id, sn.session_id, sn.body, sn.title, sn.emoji,
 		       sn.created_at, sn.updated_at, sn.actionables_scanned_at, sn.has_actionables,
-		       sn.actionables_scan_version,
+		       sn.actionables_scan_version, sn.actionables_json, sn.actionables_extracted_at,
+		       sn.actionables_extract_version,
 		       s.started_at,
 		       COALESCE(t.title, ''), COALESCE(p.name, '')
 		FROM session_notes sn
@@ -183,11 +201,12 @@ func (s *Store) ListAllNotes(limit int) ([]GlobalNote, error) {
 	for rows.Next() {
 		var n GlobalNote
 		var created, updated int64
-		var scanned sql.NullInt64
+		var scanned, extracted sql.NullInt64
 		var started int64
 		if err := rows.Scan(
 			&n.ID, &n.SessionID, &n.Body, &n.Title, &n.Emoji,
 			&created, &updated, &scanned, &n.HasActionables, &n.ActionablesScanVersion,
+			&n.ActionablesJSON, &extracted, &n.ActionablesExtractVersion,
 			&started, &n.TaskTitle, &n.ProjectName,
 		); err != nil {
 			return nil, err
@@ -195,6 +214,7 @@ func (s *Store) ListAllNotes(limit int) ([]GlobalNote, error) {
 		n.CreatedAt = toTime(created)
 		n.UpdatedAt = toTime(updated)
 		n.ActionablesScannedAt = toTimePtr(scanned)
+		n.ActionablesExtractedAt = toTimePtr(extracted)
 		n.SessionStarted = toTime(started)
 		out = append(out, n)
 	}

@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS session_notes (
     updated_at            INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     actionables_scanned_at INTEGER,
     has_actionables       INTEGER NOT NULL DEFAULT 0,
-    actionables_scan_version INTEGER NOT NULL DEFAULT 0
+    actionables_scan_version INTEGER NOT NULL DEFAULT 0,
+    actionables_json      TEXT    NOT NULL DEFAULT '',
+    actionables_extracted_at INTEGER,
+    actionables_extract_version INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_session_notes_session ON session_notes(session_id);

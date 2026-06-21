@@ -72,6 +72,11 @@ var actionablesTemplateRE = regexp.MustCompile(`(?s)(?:\{"has_actionables"\s*:\s
 // ActionablesScanVersion bumps when the detection prompt changes so stale scans are redone.
 const ActionablesScanVersion = 4
 
+// ActionablesExtractVersion bumps when the extraction prompt changes so stale caches are redone.
+const ActionablesExtractVersion = 1
+
+var tasksBlockRE = regexp.MustCompile(`(?s)\{[^{}]*"tasks"\s*:\s*\[[^\]]*\]\s*\}`)
+
 var (
 	resolvedModel   string
 	resolvedModelMu sync.Mutex
@@ -233,6 +238,129 @@ func DetectActionables(baseURL, model, body string) (bool, error) {
 	}
 	recordSuccess(time.Since(start))
 	return has, nil
+}
+
+// ExtractActionables pulls concrete task strings from a note body.
+func ExtractActionables(baseURL, model, body string) ([]string, error) {
+	start := time.Now()
+	recordBegin()
+	fail := func(err error) ([]string, error) {
+		recordFailure(time.Since(start))
+		return nil, err
+	}
+
+	baseURL = strings.TrimRight(baseURL, "/")
+	if baseURL == "" {
+		return fail(fmt.Errorf("lm studio url is empty"))
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return fail(fmt.Errorf("note body is empty"))
+	}
+	if len(body) > 4000 {
+		body = body[:4000]
+	}
+
+	modelID, err := resolveModel(baseURL, model)
+	if err != nil {
+		return fail(err)
+	}
+
+	prompt := extractActionablesPrompt(body)
+	reqBody, err := noteChatRequest(modelID,
+		"You extract actionable tasks from notes. Output only raw JSON.",
+		prompt,
+		0.1,
+	)
+	if err != nil {
+		return fail(err)
+	}
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return fail(err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fail(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fail(fmt.Errorf("lm studio %d: %s", resp.StatusCode, trimErr(string(raw))))
+	}
+
+	var cr chatResponse
+	if err := json.Unmarshal(raw, &cr); err != nil {
+		return fail(err)
+	}
+	if len(cr.Choices) == 0 {
+		return fail(fmt.Errorf("lm studio: empty response"))
+	}
+
+	msg := cr.Choices[0].Message
+	text := strings.TrimSpace(msg.Content)
+	if text == "" {
+		text = strings.TrimSpace(msg.ReasoningContent)
+	}
+	if text == "" {
+		return fail(fmt.Errorf("lm studio: model returned no text"))
+	}
+
+	tasks, err := parseExtractedTasks(text)
+	if err != nil {
+		return fail(err)
+	}
+	recordSuccess(time.Since(start))
+	return tasks, nil
+}
+
+func extractActionablesPrompt(body string) string {
+	return `Extract every clear, concrete action item from this focus-session note.
+Reply with ONLY one JSON object: {"tasks": ["short imperative task", ...]}.
+Each task should be 5–15 words, specific enough to act on. Skip mood, status updates, and vague ideas.
+
+Note:
+` + body
+}
+
+func parseExtractedTasks(s string) ([]string, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	s = strings.TrimSpace(s)
+
+	type result struct {
+		Tasks []string `json:"tasks"`
+	}
+
+	tryDecode := func(candidate string) ([]string, bool) {
+		var r result
+		if err := json.Unmarshal([]byte(strings.TrimSpace(candidate)), &r); err != nil {
+			return nil, false
+		}
+		var out []string
+		for _, t := range r.Tasks {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				out = append(out, t)
+			}
+		}
+		return out, true
+	}
+
+	candidates := tasksBlockRE.FindAllString(s, -1)
+	if len(candidates) == 0 {
+		candidates = []string{s}
+	}
+	for i := len(candidates) - 1; i >= 0; i-- {
+		if tasks, ok := tryDecode(candidates[i]); ok {
+			return tasks, nil
+		}
+	}
+	return nil, fmt.Errorf("parse extracted tasks: no valid JSON (got: %s)", trimErr(s))
 }
 
 func actionablesPrompt(body string) string {

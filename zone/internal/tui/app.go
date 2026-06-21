@@ -175,6 +175,15 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.allNotes.onNoteActionablesScanned(msg)
 		}
 		return m, nil
+
+	case noteActionablesExtractedMsg:
+		if m.zone != nil {
+			m.zone.onNoteActionablesExtracted(msg)
+		}
+		if m.allNotes != nil {
+			m.allNotes.onNoteActionablesExtracted(msg)
+		}
+		return m, nil
 	}
 
 	return m, m.updateActive(msg)

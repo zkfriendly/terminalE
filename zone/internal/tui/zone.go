@@ -47,6 +47,13 @@ type zoneView struct {
 	deferActionableScan  bool           // run pending scan on next tick (resume path)
 	noteLabelErr         string         // last labeling error (shown in picker)
 	confirmingNoteDelete bool
+
+	viewingActionables    bool
+	actionablesNoteID     int64
+	actionablesTitle      string
+	actionablesItems      []string
+	extractingActionables bool
+	actionablesExtractErr string
 }
 
 type noteEnrichedMsg struct {
@@ -81,6 +88,9 @@ func (z *zoneView) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case noteActionablesScannedMsg:
 		z.onNoteActionablesScanned(msg)
+		return nil
+	case noteActionablesExtractedMsg:
+		z.onNoteActionablesExtracted(msg)
 		return nil
 	case tea.KeyPressMsg:
 		return z.handleKey(msg)
