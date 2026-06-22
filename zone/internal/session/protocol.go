@@ -19,6 +19,7 @@ const (
 	OpVolume  = "volume"  // set volume (Volume 0..1)
 	OpPreview = "preview" // play the start + end chimes as a demo
 	OpSetTask = "settask" // switch the current task (TaskID, 0 = no task)
+	OpAdjust  = "adjust"  // scrub block time (Delta seconds; +rewind, −skip)
 	OpEnd     = "end"     // end the session and stop the daemon
 )
 
@@ -28,6 +29,7 @@ type Command struct {
 	Index  int     `json:"index,omitempty"`
 	Volume float64 `json:"volume,omitempty"`
 	TaskID int64   `json:"task_id,omitempty"`
+	Delta  int     `json:"delta,omitempty"` // seconds; +rewind, −skip ahead
 }
 
 // TrackInfo mirrors an ambient layer's state for display.

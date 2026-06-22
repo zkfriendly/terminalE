@@ -74,6 +74,10 @@ func (v *settingsView) update(msg tea.Msg) tea.Cmd {
 			return v.updateInput(msg)
 		}
 		return v.updateNormal(msg)
+	case tea.PasteMsg:
+		if v.editing {
+			return v.updateInput(msg)
+		}
 	}
 	return nil
 }
@@ -111,8 +115,9 @@ func (v *settingsView) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-func (v *settingsView) updateInput(msg tea.KeyPressMsg) tea.Cmd {
-	switch msg.String() {
+func (v *settingsView) updateInput(msg tea.Msg) tea.Cmd {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
 	case "esc":
 		v.editing = false
 		v.input.Blur()
@@ -132,6 +137,7 @@ func (v *settingsView) updateInput(msg tea.KeyPressMsg) tea.Cmd {
 			v.save()
 		}
 		return nil
+		}
 	}
 	var cmd tea.Cmd
 	v.input, cmd = v.input.Update(msg)

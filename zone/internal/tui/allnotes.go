@@ -81,7 +81,11 @@ func (v *allNotesView) update(msg tea.Msg) tea.Cmd {
 		if v.picking {
 			return v.handleBrowseKey(msg.String())
 		}
-		return v.handleEditorKey(msg)
+		return v.handleEditorInput(msg)
+	case tea.PasteMsg:
+		if !v.picking && !v.viewingActionables {
+			return v.handleEditorInput(msg)
+		}
 	}
 	return nil
 }
@@ -134,9 +138,11 @@ func (v *allNotesView) handleBrowseKey(key string) tea.Cmd {
 	return nil
 }
 
-func (v *allNotesView) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
-	if msg.String() == "esc" && v.editor.mode == noteModeNormal {
-		return v.tryBrowse()
+func (v *allNotesView) handleEditorInput(msg tea.Msg) tea.Cmd {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		if keyMsg.String() == "esc" && v.editor.mode == noteModeNormal {
+			return v.tryBrowse()
+		}
 	}
 
 	cmd, act := v.editor.Update(msg)
@@ -734,6 +740,9 @@ func (v *allNotesView) actionHints() []string {
 		return hints
 	}
 	hints := []string{
+		s.helpEntry("y/p · ⌃c/v", "copy/paste"),
+		s.helpEntry("u/:redo", "undo/redo"),
+		s.helpEntry("v/V", "select"),
 		s.helpEntry(":w", "save"),
 		s.helpEntry(":wq/ZZ", "save & browse"),
 	}
@@ -748,6 +757,9 @@ func (v *allNotesView) infoHints() []string {
 	if !v.picking {
 		var hints []string
 		hints = append(hints, modeStyle(v.editor.mode, s).Render(v.editor.ModeLabel()))
+		if hint := v.editor.editorInfoHint(s); hint != "" {
+			hints = append(hints, hint)
+		}
 		if v.noteIsDirty() {
 			hints = append(hints, s.Break.Render("unsaved changes"))
 		}

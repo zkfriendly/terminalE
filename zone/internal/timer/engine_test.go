@@ -144,3 +144,32 @@ func TestNoBreakSessions(t *testing.T) {
 		t.Fatal("session should have finished")
 	}
 }
+
+func TestAdjustRemaining(t *testing.T) {
+	e := New(100, 50, 150, 0)
+	e.Start()
+	tickN(e, 20)
+	if e.Remaining() != 80 || e.Elapsed() != 20 {
+		t.Fatalf("setup: rem=%d elapsed=%d", e.Remaining(), e.Elapsed())
+	}
+	if !e.AdjustRemaining(15) {
+		t.Fatal("rewind should succeed")
+	}
+	if e.Remaining() != 95 || e.Elapsed() != 5 {
+		t.Fatalf("rewind: rem=%d elapsed=%d", e.Remaining(), e.Elapsed())
+	}
+	if !e.AdjustRemaining(-30) {
+		t.Fatal("forward should succeed")
+	}
+	if e.Remaining() != 65 || e.Elapsed() != 35 {
+		t.Fatalf("forward: rem=%d elapsed=%d", e.Remaining(), e.Elapsed())
+	}
+	e.AdjustRemaining(1000)
+	if e.Remaining() != 100 {
+		t.Fatalf("expected clamp to planned, got %d", e.Remaining())
+	}
+	e.AdjustRemaining(-1000)
+	if e.Remaining() != 0 {
+		t.Fatalf("expected clamp to 0, got %d", e.Remaining())
+	}
+}

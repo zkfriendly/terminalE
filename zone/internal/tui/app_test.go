@@ -277,7 +277,7 @@ func TestPrepareScreenIsFriendly(t *testing.T) {
 	out := z.render(100, 40)
 	for _, want := range []string{
 		"the zone", "glass of water",
-		"Chapter one", "focus begins in",
+		"Chapter one", "elapsed", "block",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("prepare screen missing %q:\n%s", want, out)
@@ -869,11 +869,11 @@ func TestNoteEscBrowseDoesNotSave(t *testing.T) {
 	z.notePicking = false
 
 	z.noteEditor.Load("temporary edit")
-	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // insert -> normal
+	_ = z.handleNotesInput(tea.KeyPressMsg{Text: "esc"}) // insert -> normal
 	if z.noteEditor.mode != noteModeNormal {
 		t.Fatalf("expected normal mode after esc, got %d", z.noteEditor.mode)
 	}
-	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // normal -> blocked while dirty
+	_ = z.handleNotesInput(tea.KeyPressMsg{Text: "esc"}) // normal -> blocked while dirty
 
 	if z.notePicking {
 		t.Fatal("esc should not browse while note has unsaved changes")
@@ -903,8 +903,8 @@ func TestNoteEscBrowseWhenClean(t *testing.T) {
 	z.loadNote(n1)
 	z.notePicking = false
 
-	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // insert -> normal
-	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "esc"}) // normal -> browse
+	_ = z.handleNotesInput(tea.KeyPressMsg{Text: "esc"}) // insert -> normal
+	_ = z.handleNotesInput(tea.KeyPressMsg{Text: "esc"}) // normal -> browse
 
 	if !z.notePicking {
 		t.Fatal("esc should browse when note is unchanged")
@@ -935,7 +935,7 @@ func TestNoteSaveQuitReturnsToPicker(t *testing.T) {
 	z.noteEditor.Update(tea.KeyPressMsg{Text: ":"})
 	z.noteEditor.Update(tea.KeyPressMsg{Text: "w"})
 	z.noteEditor.Update(tea.KeyPressMsg{Text: "q"})
-	_ = z.handleNotesKey(tea.KeyPressMsg{Text: "enter"})
+	_ = z.handleNotesInput(tea.KeyPressMsg{Text: "enter"})
 
 	if !z.noting {
 		t.Fatal(":wq should stay in notes mode")

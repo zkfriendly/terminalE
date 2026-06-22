@@ -413,14 +413,16 @@ func (z *zoneView) deleteSelectedNote() {
 	z.ensureNotePickVisible()
 }
 
-func (z *zoneView) handleNotesKey(msg tea.KeyPressMsg) tea.Cmd {
-	if z.notePicking {
-		return z.handleNotePickerKey(msg.String())
-	}
-
-	k := msg.String()
-	if k == "esc" && z.noteEditor.mode == noteModeNormal {
-		return z.tryBrowseNotes()
+func (z *zoneView) handleNotesInput(msg tea.Msg) tea.Cmd {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		if z.notePicking {
+			return z.handleNotePickerKey(keyMsg.String())
+		}
+		if keyMsg.String() == "esc" && z.noteEditor.mode == noteModeNormal {
+			return z.tryBrowseNotes()
+		}
+	} else if _, ok := msg.(tea.PasteMsg); !ok {
+		return nil
 	}
 
 	cmd, act := z.noteEditor.Update(msg)
@@ -541,6 +543,9 @@ func (z *zoneView) noteActionHints() []string {
 		return z.notePickerActionHints()
 	}
 	hints := []string{
+		s.helpEntry("y/p · ⌃c/v", "copy/paste"),
+		s.helpEntry("u/:redo", "undo/redo"),
+		s.helpEntry("v/V", "select"),
 		s.helpEntry(":w", "save"),
 		s.helpEntry(":wq/ZZ", "save & browse"),
 		s.helpEntry(":new", "new note"),
@@ -583,6 +588,9 @@ func (z *zoneView) noteInfoHints() []string {
 	}
 	var hints []string
 	hints = append(hints, modeStyle(z.noteEditor.mode, s).Render(z.noteEditor.ModeLabel()))
+	if hint := z.noteEditor.editorInfoHint(s); hint != "" {
+		hints = append(hints, hint)
+	}
 	if z.noteIsDirty() {
 		hints = append(hints, s.Break.Render("unsaved changes"))
 	}

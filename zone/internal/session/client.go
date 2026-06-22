@@ -92,6 +92,11 @@ func (c *Client) SetTask(taskID int64) (Snapshot, error) {
 	return c.do(Command{Op: OpSetTask, TaskID: taskID})
 }
 
+// Adjust scrubs the current block by delta seconds (+rewind, −skip ahead).
+func (c *Client) Adjust(delta int) (Snapshot, error) {
+	return c.do(Command{Op: OpAdjust, Delta: delta})
+}
+
 // End ends the session and stops the daemon.
 func (c *Client) End() (Snapshot, error) { return c.do(Command{Op: OpEnd}) }
 

@@ -119,6 +119,57 @@ func TestDaemonRoundtrip(t *testing.T) {
 	}
 }
 
+func TestDaemonAdjust(t *testing.T) {
+	st := isolate(t)
+	sess, err := st.CreateSession(nil, 60, 1, 61, 0)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	daemonErr := make(chan error, 1)
+	go func() { daemonErr <- RunDaemon(sess.ID) }()
+	t.Cleanup(func() {
+		if c, err := Dial(); err == nil {
+			c.End()
+			c.Close()
+		}
+		<-daemonErr
+	})
+	if !waitFor(IsAlive, 3*time.Second) {
+		t.Fatal("daemon did not start")
+	}
+
+	client, err := Dial()
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	snap, err := client.Status()
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if snap.Remaining != 60 || snap.Planned != 60 {
+		t.Fatalf("unexpected start: %+v", snap)
+	}
+
+	snap, err = client.Adjust(-15)
+	if err != nil {
+		t.Fatalf("forward scrub: %v", err)
+	}
+	if snap.Remaining != 45 {
+		t.Fatalf("expected 45s remaining after forward scrub, got %d", snap.Remaining)
+	}
+
+	snap, err = client.Adjust(10)
+	if err != nil {
+		t.Fatalf("rewind scrub: %v", err)
+	}
+	if snap.Remaining != 55 {
+		t.Fatalf("expected 55s remaining after rewind, got %d", snap.Remaining)
+	}
+}
+
 func TestDaemonTaskSwitching(t *testing.T) {
 	st := isolate(t)
 	p, _ := st.CreateProject("Code", "")

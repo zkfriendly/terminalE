@@ -165,6 +165,24 @@ func (e *Engine) Planned() int {
 // Elapsed returns seconds spent so far in the current block.
 func (e *Engine) Elapsed() int { return e.Planned() - e.remaining }
 
+// AdjustRemaining moves the playhead by delta seconds. Positive delta rewinds
+// (adds time back); negative delta skips ahead. Remaining is clamped to
+// [0, Planned]. Returns false when the session is already done.
+func (e *Engine) AdjustRemaining(delta int) bool {
+	if e.done || delta == 0 {
+		return false
+	}
+	e.remaining += delta
+	planned := e.Planned()
+	if e.remaining > planned {
+		e.remaining = planned
+	}
+	if e.remaining < 0 {
+		e.remaining = 0
+	}
+	return true
+}
+
 // CycleIndex returns the current 0-based cycle index.
 func (e *Engine) CycleIndex() int { return e.cycleIdx }
 

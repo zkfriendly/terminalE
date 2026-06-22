@@ -86,7 +86,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		if msg.String() == "ctrl+c" {
+		if msg.String() == "ctrl+c" && !m.ctrlCIsLocal() {
 			m.shutdown()
 			return m, tea.Quit
 		}
@@ -285,6 +285,20 @@ func (m *App) shellContentEscLocal() bool {
 		return m.allNotes != nil && m.allNotes.escIsLocal()
 	case pageSettings:
 		return m.settings != nil && m.settings.escIsLocal()
+	}
+	return false
+}
+
+// ctrlCIsLocal reports whether ctrl+c should copy in the note editor instead of quitting.
+func (m *App) ctrlCIsLocal() bool {
+	switch m.view {
+	case viewZone:
+		return m.zone != nil && m.zone.noting && !m.zone.notePicking
+	case viewShell:
+		if m.shell == nil || m.shell.page != pageNotes || m.allNotes == nil {
+			return false
+		}
+		return !m.allNotes.picking
 	}
 	return false
 }

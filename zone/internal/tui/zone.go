@@ -12,6 +12,8 @@ import (
 	"github.com/zkfriendly/zone/internal/store"
 )
 
+const zoneScrubStep = 15
+
 // zoneView is the full-screen pomodoro focus experience. It is a thin client of
 // the focus daemon: it renders snapshots and sends commands; the daemon owns the
 // timer and audio and keeps running even if this UI (or the whole terminal) is
@@ -92,8 +94,8 @@ func (z *zoneView) update(msg tea.Msg) tea.Cmd {
 	case noteActionablesExtractedMsg:
 		z.onNoteActionablesExtracted(msg)
 		return nil
-	case tea.KeyPressMsg:
-		return z.handleKey(msg)
+	case tea.KeyPressMsg, tea.PasteMsg:
+		return z.handleInput(msg)
 	}
 	return nil
 }
@@ -118,6 +120,16 @@ func (z *zoneView) apply(snap session.Snapshot, err error) {
 	z.snap = snap
 }
 
+func (z *zoneView) handleInput(msg tea.Msg) tea.Cmd {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		return z.handleKey(keyMsg)
+	}
+	if _, ok := msg.(tea.PasteMsg); ok && z.noting && !z.notePicking {
+		return z.handleNotesInput(msg)
+	}
+	return nil
+}
+
 func (z *zoneView) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if z.disconnected {
 		return z.detach()
@@ -137,7 +149,7 @@ func (z *zoneView) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	if z.noting {
-		return z.handleNotesKey(msg)
+		return z.handleNotesInput(msg)
 	}
 
 	if z.confirmingSkip || z.confirmingEnd {
@@ -175,6 +187,10 @@ func (z *zoneView) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	switch key {
+	case "left", "h":
+		z.scrub(zoneScrubStep)
+	case "right", "l":
+		z.scrub(-zoneScrubStep)
 	case "space", " ":
 		if z.client != nil {
 			z.apply(z.client.Toggle())
@@ -202,6 +218,13 @@ func (z *zoneView) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return z.detach()
 	}
 	return nil
+}
+
+func (z *zoneView) scrub(delta int) {
+	if z.client == nil || z.snap.Finished || z.snap.Planned <= 0 {
+		return
+	}
+	z.apply(z.client.Adjust(delta))
 }
 
 // detach closes the client and returns to the dashboard, leaving the daemon as-is.
@@ -299,6 +322,7 @@ func (z *zoneView) zoneActionHints() []string {
 	}
 	if z.snap.Phase == "prepare" {
 		return []string{
+			s.helpEntry("←/→", "scrub ±15s"),
 			s.helpEntry("t", "task"),
 			s.helpEntry("n", "notes"),
 			s.helpEntry("space", "pause"),
@@ -308,6 +332,7 @@ func (z *zoneView) zoneActionHints() []string {
 		}
 	}
 	return []string{
+		s.helpEntry("←/→", "scrub ±15s"),
 		s.helpEntry("space", "pause"),
 		s.helpEntry("t", "task"),
 		s.helpEntry("n", "notes"),
@@ -322,19 +347,34 @@ func (z *zoneView) renderFocusBody(width, height int) string {
 
 	var phaseLabel string
 	var clockStyle lipgloss.Style
+	var barFill lipgloss.Style
 	switch z.snap.Phase {
 	case "break":
 		phaseLabel = s.Break.Render("◌ BREAK")
 		clockStyle = lipgloss.NewStyle().Foreground(colBreak).Bold(true)
+		barFill = lipgloss.NewStyle().Foreground(colBreak)
 	default:
 		phaseLabel = s.Work.Render("● FOCUS")
 		clockStyle = lipgloss.NewStyle().Foreground(colWork).Bold(true)
+		barFill = lipgloss.NewStyle().Foreground(colWork)
 	}
 	if !z.snap.Running {
 		phaseLabel = s.Dim.Render("⏸ PAUSED")
 		clockStyle = lipgloss.NewStyle().Foreground(colDim).Bold(true)
 	}
 
+	elapsed := z.snap.Planned - z.snap.Remaining
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	barW := width - 16
+	if barW < 24 {
+		barW = 24
+	}
+	if barW > 52 {
+		barW = 52
+	}
+	progress := renderBlockProgressBar(elapsed, z.snap.Planned, barW, barFill, s)
 	clock := clockStyle.Render(bigText(formatClock(z.snap.Remaining)))
 
 	var taskLine, projLine string
@@ -350,6 +390,8 @@ func (z *zoneView) renderFocusBody(width, height int) string {
 
 	block := lipgloss.JoinVertical(lipgloss.Center,
 		phaseLabel,
+		"",
+		progress,
 		"",
 		clock,
 		"",
@@ -391,11 +433,25 @@ func (z *zoneView) renderPrepareBody(width, height int) string {
 	)
 
 	var countdown string
+	clockStyle := lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	if z.snap.Running {
-		countdown = s.Dim.Render("focus begins in  ") + lipgloss.NewStyle().Foreground(colAccent).Bold(true).Render(formatClock(z.snap.Remaining))
+		countdown = clockStyle.Render(bigText(formatClock(z.snap.Remaining)))
 	} else {
-		countdown = s.Dim.Render("paused at  ") + s.Dim.Render(formatClock(z.snap.Remaining))
+		countdown = lipgloss.NewStyle().Foreground(colDim).Bold(true).Render(bigText(formatClock(z.snap.Remaining)))
 	}
+
+	elapsed := z.snap.Planned - z.snap.Remaining
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	barW := width - 16
+	if barW < 24 {
+		barW = 24
+	}
+	if barW > 52 {
+		barW = 52
+	}
+	progress := renderBlockProgressBar(elapsed, z.snap.Planned, barW, lipgloss.NewStyle().Foreground(colAccent), s)
 
 	block := lipgloss.JoinVertical(lipgloss.Center,
 		hi,
@@ -404,6 +460,8 @@ func (z *zoneView) renderPrepareBody(width, height int) string {
 		about,
 		"",
 		tips,
+		"",
+		progress,
 		"",
 		countdown,
 		"",
@@ -631,4 +689,25 @@ func (z *zoneView) renderCycleDotsOnly() string {
 		}
 	}
 	return b.String()
+}
+
+func renderBlockProgressBar(elapsed, planned, width int, fill lipgloss.Style, s Styles) string {
+	if width < 8 {
+		width = 8
+	}
+	filled := 0
+	if planned > 0 {
+		filled = elapsed * width / planned
+	}
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	bar := fill.Render(strings.Repeat("█", filled)) +
+		s.Dim.Render(strings.Repeat("░", width-filled))
+	label := s.Dim.Render(formatDur(elapsed)) + s.Dim.Render(" elapsed  ·  ") +
+		s.Dim.Render(formatDur(planned)) + s.Dim.Render(" block")
+	return lipgloss.JoinVertical(lipgloss.Center, bar, label)
 }

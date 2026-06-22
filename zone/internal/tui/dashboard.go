@@ -166,12 +166,17 @@ func (d *dashboard) update(msg tea.Msg) tea.Cmd {
 			return d.updateInput(msg)
 		}
 		return d.updateNormal(msg)
+	case tea.PasteMsg:
+		if d.mode != modeNormal {
+			return d.updateInput(msg)
+		}
 	}
 	return nil
 }
 
-func (d *dashboard) updateInput(msg tea.KeyPressMsg) tea.Cmd {
-	switch msg.String() {
+func (d *dashboard) updateInput(msg tea.Msg) tea.Cmd {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
 	case "esc":
 		d.mode = modeNormal
 		d.input.Blur()
@@ -187,6 +192,7 @@ func (d *dashboard) updateInput(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		return d.commit(mode, val)
+		}
 	}
 	var cmd tea.Cmd
 	d.input, cmd = d.input.Update(msg)

@@ -219,6 +219,19 @@ func (s *server) handle(cmd Command) Snapshot {
 		if !s.finished {
 			s.setTask(cmd.TaskID)
 		}
+	case OpAdjust:
+		if !s.finished && cmd.Delta != 0 {
+			if s.engine.AdjustRemaining(cmd.Delta) {
+				if s.engine.Phase() == timer.Work {
+					elapsed := s.engine.Elapsed()
+					if cmd.Delta < 0 {
+						s.recordWorkSegment(elapsed)
+					} else if s.segCredited > elapsed {
+						s.segCredited = elapsed
+					}
+				}
+			}
+		}
 	case OpEnd:
 		s.endLocked()
 		defer s.signalDone()
