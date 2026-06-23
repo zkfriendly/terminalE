@@ -61,9 +61,9 @@ func settingsFields() []settingField {
 		{label: "Work (min)", kind: settingInt},
 		{label: "Break (min)", kind: settingInt},
 		{label: "Total session (min)", kind: settingInt},
-		{section: "Notes", label: "LM Studio labeling", kind: settingBool},
-		{label: "LM Studio URL", kind: settingString},
-		{label: "LM Studio model", kind: settingString},
+		{section: "Notes", label: "Local LLM labeling", kind: settingBool},
+		{label: "Local LLM URL", kind: settingString},
+		{label: "Local LLM model", kind: settingString},
 	}
 }
 
@@ -118,25 +118,25 @@ func (v *settingsView) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 func (v *settingsView) updateInput(msg tea.Msg) tea.Cmd {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
-	case "esc":
-		v.editing = false
-		v.input.Blur()
-		v.input.Reset()
-		return nil
-	case "enter":
-		val := strings.TrimSpace(v.input.Value())
-		v.editing = false
-		v.input.Blur()
-		v.input.Reset()
-		if val == "" {
+		case "esc":
+			v.editing = false
+			v.input.Blur()
+			v.input.Reset()
 			return nil
-		}
-		if err := v.applyInput(val); err != nil {
-			v.err = err.Error()
-		} else {
-			v.save()
-		}
-		return nil
+		case "enter":
+			val := strings.TrimSpace(v.input.Value())
+			v.editing = false
+			v.input.Blur()
+			v.input.Reset()
+			if val == "" {
+				return nil
+			}
+			if err := v.applyInput(val); err != nil {
+				v.err = err.Error()
+			} else {
+				v.save()
+			}
+			return nil
 		}
 	}
 	var cmd tea.Cmd
@@ -172,11 +172,11 @@ func (v *settingsView) fieldValue(f settingField) string {
 		return strconv.Itoa(v.cfg.BreakMinutes)
 	case "Total session (min)":
 		return strconv.Itoa(v.cfg.TotalMinutes)
-	case "LM Studio labeling":
+	case "Local LLM labeling":
 		return boolLabel(v.cfg.LMStudioEnabled)
-	case "LM Studio URL":
+	case "Local LLM URL":
 		return v.cfg.LMStudioURL
-	case "LM Studio model":
+	case "Local LLM model":
 		return v.cfg.LMStudioModel
 	default:
 		return ""
@@ -196,7 +196,7 @@ func (v *settingsView) toggleOrCycle() {
 		return
 	}
 	switch f.label {
-	case "LM Studio labeling":
+	case "Local LLM labeling":
 		v.cfg.LMStudioEnabled = !v.cfg.LMStudioEnabled
 	default:
 		return
@@ -234,9 +234,9 @@ func (v *settingsView) applyInput(val string) error {
 			return fmt.Errorf("total minutes must be > 0")
 		}
 		v.cfg.TotalMinutes = n
-	case "LM Studio URL":
+	case "Local LLM URL":
 		v.cfg.LMStudioURL = val
-	case "LM Studio model":
+	case "Local LLM model":
 		v.cfg.LMStudioModel = val
 	}
 	return nil

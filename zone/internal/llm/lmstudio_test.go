@@ -40,6 +40,41 @@ func TestEnrichNote(t *testing.T) {
 	}
 }
 
+func TestEnrichNoteOllamaFallback(t *testing.T) {
+	ResetModelCache()
+	ResetStats()
+	var sawOllamaChat bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			http.NotFound(w, r)
+		case "/api/tags":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[{"name":"llama3.2:latest"}]}`))
+		case "/v1/chat/completions":
+			http.NotFound(w, r)
+		case "/api/chat":
+			sawOllamaChat = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"emoji\":\"🦙\",\"title\":\"Ollama note label\"}"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	meta, err := EnrichNote(srv.URL, "", "label this via ollama")
+	if err != nil {
+		t.Fatalf("enrich: %v", err)
+	}
+	if !sawOllamaChat {
+		t.Fatal("expected Ollama /api/chat fallback")
+	}
+	if meta.Emoji != "🦙" || meta.Title != "Ollama note label" {
+		t.Fatalf("unexpected meta: %+v", meta)
+	}
+}
+
 func TestEnrichNoteReasoningModel(t *testing.T) {
 	ResetModelCache()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

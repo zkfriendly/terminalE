@@ -19,22 +19,15 @@ type NoteMeta struct {
 }
 
 type chatRequest struct {
-	Model           string        `json:"model"`
-	Messages        []chatMessage `json:"messages"`
-	Temperature     float64       `json:"temperature"`
-	MaxTokens       int           `json:"max_tokens"`
-	ReasoningTokens int           `json:"reasoning_tokens,omitempty"`
-	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Temperature float64       `json:"temperature"`
 }
 
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
-
-// Note LLM calls only need a short JSON answer, but reasoning models need room
-// to think. Use LM Studio's unlimited completion (-1) and max reasoning effort.
-const noteReasoningEffort = "high"
 
 func noteChatRequest(modelID, system, user string, temperature float64) ([]byte, error) {
 	return json.Marshal(chatRequest{
@@ -43,9 +36,7 @@ func noteChatRequest(modelID, system, user string, temperature float64) ([]byte,
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		Temperature:     temperature,
-		MaxTokens:       -1,
-		ReasoningEffort: noteReasoningEffort,
+		Temperature: temperature,
 	})
 }
 
@@ -64,6 +55,26 @@ type modelsResponse struct {
 	} `json:"data"`
 }
 
+type ollamaTagsResponse struct {
+	Models []struct {
+		Name  string `json:"name"`
+		Model string `json:"model"`
+	} `json:"models"`
+}
+
+type ollamaChatRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+	Options  struct {
+		Temperature float64 `json:"temperature"`
+	} `json:"options"`
+}
+
+type ollamaChatResponse struct {
+	Message chatMessage `json:"message"`
+}
+
 var jsonBlockRE = regexp.MustCompile(`(?s)\{[^{}]*"emoji"\s*:\s*"[^"]*"\s*,\s*"title"\s*:\s*"[^"]*"\s*\}`)
 var jsonBlockAltRE = regexp.MustCompile(`(?s)\{[^{}]*"title"\s*:\s*"[^"]*"\s*,\s*"emoji"\s*:\s*"[^"]*"\s*\}`)
 var actionablesBlockRE = regexp.MustCompile(`(?s)\{[^{}]*"has_actionables"\s*:\s*(true|false)\s*\}`)
@@ -79,10 +90,11 @@ var tasksBlockRE = regexp.MustCompile(`(?s)\{[^{}]*"tasks"\s*:\s*\[[^\]]*\]\s*\}
 
 var (
 	resolvedModel   string
+	resolvedModels  = map[string]string{}
 	resolvedModelMu sync.Mutex
 )
 
-// EnrichNote asks a local LM Studio server to suggest an emoji and short title.
+// EnrichNote asks a local LLM server to suggest an emoji and short title.
 func EnrichNote(baseURL, model, body string) (NoteMeta, error) {
 	start := time.Now()
 	recordBegin()
@@ -93,7 +105,7 @@ func EnrichNote(baseURL, model, body string) (NoteMeta, error) {
 
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" {
-		return fail(fmt.Errorf("lm studio url is empty"))
+		return fail(fmt.Errorf("local llm url is empty"))
 	}
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -114,45 +126,13 @@ Use keys "emoji" (one emoji) and "title" (3-6 words). No markdown, no explanatio
 Note:
 ` + body
 
-	reqBody, err := noteChatRequest(modelID,
+	text, err := localChat(baseURL, modelID,
 		"You label notes. Output only raw JSON.",
 		prompt,
 		0.2,
 	)
 	if err != nil {
 		return fail(err)
-	}
-
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		return fail(err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fail(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fail(fmt.Errorf("lm studio %d: %s", resp.StatusCode, trimErr(string(raw))))
-	}
-
-	var cr chatResponse
-	if err := json.Unmarshal(raw, &cr); err != nil {
-		return fail(err)
-	}
-	if len(cr.Choices) == 0 {
-		return fail(fmt.Errorf("lm studio: empty response"))
-	}
-
-	msg := cr.Choices[0].Message
-	text := strings.TrimSpace(msg.Content)
-	if text == "" {
-		text = strings.TrimSpace(msg.ReasoningContent)
-	}
-	if text == "" {
-		return fail(fmt.Errorf("lm studio: model returned no text"))
 	}
 
 	meta, err := parseNoteMeta(text)
@@ -163,7 +143,7 @@ Note:
 	return meta, nil
 }
 
-// DetectActionables asks a local LM Studio server whether a note contains clear tasks.
+// DetectActionables asks a local LLM server whether a note contains clear tasks.
 func DetectActionables(baseURL, model, body string) (bool, error) {
 	start := time.Now()
 	recordBegin()
@@ -174,7 +154,7 @@ func DetectActionables(baseURL, model, body string) (bool, error) {
 
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" {
-		return fail(fmt.Errorf("lm studio url is empty"))
+		return fail(fmt.Errorf("local llm url is empty"))
 	}
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -191,45 +171,13 @@ func DetectActionables(baseURL, model, body string) (bool, error) {
 
 	prompt := actionablesPrompt(body)
 
-	reqBody, err := noteChatRequest(modelID,
+	text, err := localChat(baseURL, modelID,
 		"You classify focus-session notes for extractable tasks. Output only raw JSON.",
 		prompt,
 		0.1,
 	)
 	if err != nil {
 		return fail(err)
-	}
-
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		return fail(err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fail(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fail(fmt.Errorf("lm studio %d: %s", resp.StatusCode, trimErr(string(raw))))
-	}
-
-	var cr chatResponse
-	if err := json.Unmarshal(raw, &cr); err != nil {
-		return fail(err)
-	}
-	if len(cr.Choices) == 0 {
-		return fail(fmt.Errorf("lm studio: empty response"))
-	}
-
-	msg := cr.Choices[0].Message
-	text := strings.TrimSpace(msg.Content)
-	if text == "" {
-		text = strings.TrimSpace(msg.ReasoningContent)
-	}
-	if text == "" {
-		return fail(fmt.Errorf("lm studio: model returned no text"))
 	}
 
 	has, err := parseActionablesResult(text)
@@ -251,7 +199,7 @@ func ExtractActionables(baseURL, model, body string) ([]string, error) {
 
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" {
-		return fail(fmt.Errorf("lm studio url is empty"))
+		return fail(fmt.Errorf("local llm url is empty"))
 	}
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -267,45 +215,13 @@ func ExtractActionables(baseURL, model, body string) ([]string, error) {
 	}
 
 	prompt := extractActionablesPrompt(body)
-	reqBody, err := noteChatRequest(modelID,
+	text, err := localChat(baseURL, modelID,
 		"You extract actionable tasks from notes. Output only raw JSON.",
 		prompt,
 		0.1,
 	)
 	if err != nil {
 		return fail(err)
-	}
-
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		return fail(err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fail(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fail(fmt.Errorf("lm studio %d: %s", resp.StatusCode, trimErr(string(raw))))
-	}
-
-	var cr chatResponse
-	if err := json.Unmarshal(raw, &cr); err != nil {
-		return fail(err)
-	}
-	if len(cr.Choices) == 0 {
-		return fail(fmt.Errorf("lm studio: empty response"))
-	}
-
-	msg := cr.Choices[0].Message
-	text := strings.TrimSpace(msg.Content)
-	if text == "" {
-		text = strings.TrimSpace(msg.ReasoningContent)
-	}
-	if text == "" {
-		return fail(fmt.Errorf("lm studio: model returned no text"))
 	}
 
 	tasks, err := parseExtractedTasks(text)
@@ -487,25 +403,28 @@ func reversedLines(s string) []string {
 	return lines
 }
 
-// resolveModel picks the configured model or auto-detects the first loaded
-// chat model from LM Studio (skipping embedding models).
-func resolveModel(baseURL, configured string) (string, error) {
-	if configured != "" {
-		return configured, nil
+func localChat(baseURL, modelID, system, user string, temperature float64) (string, error) {
+	text, err := openAIChat(baseURL, modelID, system, user, temperature)
+	if err == nil {
+		return text, nil
 	}
-
-	resolvedModelMu.Lock()
-	if resolvedModel != "" {
-		m := resolvedModel
-		resolvedModelMu.Unlock()
-		return m, nil
+	ollamaText, ollamaErr := ollamaChat(baseURL, modelID, system, user, temperature)
+	if ollamaErr == nil {
+		return ollamaText, nil
 	}
-	resolvedModelMu.Unlock()
+	return "", fmt.Errorf("local llm chat failed: openai-compatible: %v; ollama: %v", err, ollamaErr)
+}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(baseURL + "/v1/models")
+func openAIChat(baseURL, modelID, system, user string, temperature float64) (string, error) {
+	reqBody, err := noteChatRequest(modelID, system, user, temperature)
 	if err != nil {
-		return "", fmt.Errorf("lm studio models: %w", err)
+		return "", err
+	}
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -514,7 +433,109 @@ func resolveModel(baseURL, configured string) (string, error) {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("lm studio models %d: %s", resp.StatusCode, trimErr(string(raw)))
+		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
+	}
+
+	var cr chatResponse
+	if err := json.Unmarshal(raw, &cr); err != nil {
+		return "", err
+	}
+	if len(cr.Choices) == 0 {
+		return "", fmt.Errorf("empty response")
+	}
+
+	msg := cr.Choices[0].Message
+	text := strings.TrimSpace(msg.Content)
+	if text == "" {
+		text = strings.TrimSpace(msg.ReasoningContent)
+	}
+	if text == "" {
+		return "", fmt.Errorf("model returned no text")
+	}
+	return text, nil
+}
+
+func ollamaChat(baseURL, modelID, system, user string, temperature float64) (string, error) {
+	req := ollamaChatRequest{
+		Model: modelID,
+		Messages: []chatMessage{
+			{Role: "system", Content: system},
+			{Role: "user", Content: user},
+		},
+		Stream: false,
+	}
+	req.Options.Temperature = temperature
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Post(baseURL+"/api/chat", "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
+	}
+
+	var cr ollamaChatResponse
+	if err := json.Unmarshal(raw, &cr); err != nil {
+		return "", err
+	}
+	text := strings.TrimSpace(cr.Message.Content)
+	if text == "" {
+		return "", fmt.Errorf("model returned no text")
+	}
+	return text, nil
+}
+
+// resolveModel picks the configured model or auto-detects the first local chat
+// model (skipping embedding models).
+func resolveModel(baseURL, configured string) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+
+	resolvedModelMu.Lock()
+	if m := resolvedModels[baseURL]; m != "" {
+		resolvedModelMu.Unlock()
+		return m, nil
+	}
+	resolvedModelMu.Unlock()
+
+	if picked, err := resolveOpenAIModel(baseURL); err == nil {
+		cacheResolvedModel(baseURL, picked)
+		return picked, nil
+	} else if picked, ollamaErr := resolveOllamaModel(baseURL); ollamaErr == nil {
+		cacheResolvedModel(baseURL, picked)
+		return picked, nil
+	} else {
+		return "", fmt.Errorf("local llm models: openai-compatible: %v; ollama: %v", err, ollamaErr)
+	}
+}
+
+func resolveOpenAIModel(baseURL string) (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(baseURL + "/v1/models")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
 	}
 
 	var mr modelsResponse
@@ -532,13 +553,50 @@ func resolveModel(baseURL, configured string) (string, error) {
 		break
 	}
 	if picked == "" {
-		return "", fmt.Errorf("lm studio: no chat model loaded (start a model in LM Studio)")
+		return "", fmt.Errorf("no chat model found")
+	}
+	return picked, nil
+}
+
+func resolveOllamaModel(baseURL string) (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(baseURL + "/api/tags")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
 	}
 
+	var tr ollamaTagsResponse
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		return "", err
+	}
+	for _, m := range tr.Models {
+		name := m.Name
+		if name == "" {
+			name = m.Model
+		}
+		id := strings.ToLower(name)
+		if id == "" || strings.Contains(id, "embed") {
+			continue
+		}
+		return name, nil
+	}
+	return "", fmt.Errorf("no chat model found (run `ollama pull <model>`)")
+}
+
+func cacheResolvedModel(baseURL, model string) {
 	resolvedModelMu.Lock()
-	resolvedModel = picked
+	resolvedModels[baseURL] = model
+	resolvedModel = model
 	resolvedModelMu.Unlock()
-	return picked, nil
 }
 
 func parseNoteMeta(s string) (NoteMeta, error) {
@@ -611,5 +669,10 @@ func trimErr(s string) string {
 	return s
 }
 
-// ResetModelCache clears auto-detected model (for tests).
-func ResetModelCache() { resolvedModelMu.Lock(); resolvedModel = ""; resolvedModelMu.Unlock() }
+// ResetModelCache clears auto-detected models (for tests).
+func ResetModelCache() {
+	resolvedModelMu.Lock()
+	resolvedModel = ""
+	resolvedModels = map[string]string{}
+	resolvedModelMu.Unlock()
+}

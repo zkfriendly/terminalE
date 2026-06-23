@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // AmbientMode selects what plays during work blocks.
@@ -28,7 +29,8 @@ type Config struct {
 	ChimesEnabled  bool            `json:"chimes_enabled"`
 	Layers         map[string]bool `json:"layers"` // ambient layer on/off (e.g. beat15, beat45)
 
-	// LM Studio (OpenAI-compatible) for auto-labeling session notes.
+	// Local LLM settings for auto-labeling session notes.
+	// JSON names stay lm_studio_* so existing config files keep working.
 	LMStudioEnabled bool   `json:"lm_studio_enabled"`
 	LMStudioURL     string `json:"lm_studio_url"`
 	LMStudioModel   string `json:"lm_studio_model"` // empty = local-model
@@ -54,7 +56,7 @@ func Default() Config {
 			"beat45": false,
 		},
 		LMStudioEnabled: true,
-		LMStudioURL:     "http://127.0.0.1:1234",
+		LMStudioURL:     "http://127.0.0.1:11434",
 	}
 }
 
@@ -147,8 +149,30 @@ func (c *Config) normalize() {
 		c.Layers = map[string]bool{"beat15": false, "beat45": false}
 	}
 	if c.LMStudioURL == "" {
-		c.LMStudioURL = "http://127.0.0.1:1234"
+		c.LMStudioURL = "http://127.0.0.1:11434"
+	} else {
+		c.LMStudioURL = normalizeLocalLLMURL(c.LMStudioURL)
 	}
+}
+
+func normalizeLocalLLMURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "://") {
+		return raw
+	}
+	if isDigits(raw) {
+		return "http://127.0.0.1:" + raw
+	}
+	return "http://" + raw
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // PrepareSec, WorkSec, BreakSec, TotalSec expose the session shape in seconds.

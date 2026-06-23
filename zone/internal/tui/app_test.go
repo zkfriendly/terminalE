@@ -385,7 +385,7 @@ func TestSettingsView(t *testing.T) {
 		t.Fatal("expected settings page in shell")
 	}
 	out := app.View()
-	for _, want := range []string{"ZONE", "Config", "Application Support/zone", "Work (min)", "LM Studio URL"} {
+	for _, want := range []string{"ZONE", "Config", "Application Support/zone", "Work (min)", "Local LLM URL"} {
 		if !strings.Contains(out.Content, want) {
 			t.Fatalf("settings render missing %q:\n%s", want, out.Content)
 		}
@@ -699,7 +699,7 @@ func TestNoteLabelDisabledLeavesUnlabeled(t *testing.T) {
 	if z.noteLabelErr == "" {
 		t.Fatal("expected disabled labeling message")
 	}
-	if !strings.Contains(z.noteLabelErr, "lm_studio_enabled") {
+	if !strings.Contains(z.noteLabelErr, "Local LLM labeling") {
 		t.Fatalf("expected config hint, got %q", z.noteLabelErr)
 	}
 	notes, _ := st.ListSessionNotes(sess.ID)
