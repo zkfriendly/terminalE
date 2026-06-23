@@ -37,14 +37,14 @@ type zoneView struct {
 	pickIdx int
 
 	// Session notes overlay.
-	noting         bool
-	noteEditor     vimNoteEditor
-	noteRows       []noteBrowseRow
-	editingNoteID  int64 // 0 = composing a new note
-	notePicking     bool
-	notePickIdx     int
-	notePickOffset       int // first visible row in the browse list
-	enrichingNotes       map[int64]bool // notes waiting on LM Studio
+	noting               bool
+	noteEditor           vimNoteEditor
+	noteRows             []noteBrowseRow
+	editingNoteID        int64 // 0 = composing a new note
+	notePicking          bool
+	notePickIdx          int
+	notePickOffset       int            // first visible row in the browse list
+	enrichingNotes       map[int64]bool // notes waiting on the local LLM
 	scanningActionables  map[int64]bool // notes waiting on actionable scan
 	deferActionableScan  bool           // run pending scan on next tick (resume path)
 	noteLabelErr         string         // last labeling error (shown in picker)

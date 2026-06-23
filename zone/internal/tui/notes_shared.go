@@ -73,10 +73,10 @@ func noteLabelStatusErr(cfg *config.Config) error {
 		return fmt.Errorf("labeling unavailable (config missing)")
 	}
 	if !cfg.LMStudioEnabled {
-		return fmt.Errorf("LM Studio labeling disabled — set lm_studio_enabled to true in config.json")
+		return fmt.Errorf("Local LLM labeling disabled — enable Local LLM labeling in settings")
 	}
 	if cfg.LMStudioURL == "" {
-		return fmt.Errorf("lm_studio_url is empty in config.json")
+		return fmt.Errorf("Local LLM URL is empty in settings")
 	}
 	return nil
 }
