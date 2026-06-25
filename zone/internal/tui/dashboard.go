@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -70,6 +69,7 @@ func newDashboard(st *store.Store, s Styles) *dashboard {
 		styles:   s,
 		input:    ti,
 		workSecs: map[int64]int{},
+		pane:     paneTasks,
 		now:      time.Now(),
 	}
 	d.reload()
@@ -77,16 +77,16 @@ func newDashboard(st *store.Store, s Styles) *dashboard {
 }
 
 func (d *dashboard) reload() {
-	projects, err := d.store.ListProjects(false)
+	tasks, err := d.store.ListTaskTree(false)
 	if err != nil {
 		d.err = err
 		return
 	}
-	d.projects = projects
-	if d.selProj >= len(projects) {
-		d.selProj = max(0, len(projects)-1)
+	d.tasks = tasks
+	if d.selTask >= len(tasks) {
+		d.selTask = max(0, len(tasks)-1)
 	}
-	d.reloadTasks()
+	d.pane = paneTasks
 	if ws, err := d.store.TaskWorkSeconds(); err == nil {
 		d.workSecs = ws
 	}
@@ -126,12 +126,7 @@ func (d *dashboard) reload() {
 }
 
 func (d *dashboard) reloadTasks() {
-	if len(d.projects) == 0 {
-		d.tasks = nil
-		d.selTask = 0
-		return
-	}
-	tasks, err := d.store.ListTasks(d.projects[d.selProj].ID, false)
+	tasks, err := d.store.ListTaskTree(false)
 	if err != nil {
 		d.err = err
 		return
@@ -177,21 +172,21 @@ func (d *dashboard) update(msg tea.Msg) tea.Cmd {
 func (d *dashboard) updateInput(msg tea.Msg) tea.Cmd {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
-	case "esc":
-		d.mode = modeNormal
-		d.input.Blur()
-		d.input.Reset()
-		return nil
-	case "enter":
-		val := strings.TrimSpace(d.input.Value())
-		mode := d.mode
-		d.mode = modeNormal
-		d.input.Blur()
-		d.input.Reset()
-		if val == "" {
+		case "esc":
+			d.mode = modeNormal
+			d.input.Blur()
+			d.input.Reset()
 			return nil
-		}
-		return d.commit(mode, val)
+		case "enter":
+			val := strings.TrimSpace(d.input.Value())
+			mode := d.mode
+			d.mode = modeNormal
+			d.input.Blur()
+			d.input.Reset()
+			if val == "" {
+				return nil
+			}
+			return d.commit(mode, val)
 		}
 	}
 	var cmd tea.Cmd
@@ -200,32 +195,45 @@ func (d *dashboard) updateInput(msg tea.Msg) tea.Cmd {
 }
 
 func (d *dashboard) commit(mode int, val string) tea.Cmd {
+	var selectID int64
 	switch mode {
 	case modeNewProject:
-		if _, err := d.store.CreateProject(val, ""); err != nil {
+		t, err := d.store.CreateRootTask(val)
+		if err != nil {
 			d.err = err
+		} else {
+			selectID = t.ID
 		}
-		d.reload()
-		d.selProj = len(d.projects) - 1
-		d.reloadTasks()
 	case modeNewTask:
-		if p, ok := d.currentProject(); ok {
-			if _, err := d.store.CreateTask(p.ID, val); err != nil {
+		if t, ok := d.currentTask(); ok {
+			child, err := d.store.CreateChildTask(t.ID, val)
+			if err != nil {
 				d.err = err
+			} else {
+				selectID = child.ID
 			}
-			d.reloadTasks()
-			d.selTask = len(d.tasks) - 1
+		} else {
+			t, err := d.store.CreateRootTask(val)
+			if err != nil {
+				d.err = err
+			} else {
+				selectID = t.ID
+			}
 		}
 	case modeRenameProject:
-		if p, ok := d.currentProject(); ok {
-			_ = d.store.RenameProject(p.ID, val)
-			d.reload()
+		if t, ok := d.currentTask(); ok {
+			_ = d.store.RenameTask(t.ID, val)
+			selectID = t.ID
 		}
 	case modeRenameTask:
 		if t, ok := d.currentTask(); ok {
 			_ = d.store.RenameTask(t.ID, val)
-			d.reloadTasks()
+			selectID = t.ID
 		}
+	}
+	d.reload()
+	if selectID != 0 {
+		d.selectTask(selectID)
 	}
 	return nil
 }
@@ -242,26 +250,22 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 	case "tab":
 		return shellToggleFocusCmd()
 	case "left", "h":
-		d.pane = paneProjects
+		d.moveToParent()
 	case "right", "l":
-		d.pane = paneTasks
+		d.moveToFirstChild()
 	case "up", "k":
 		d.move(-1)
 	case "down", "j":
 		d.move(1)
+	case "N":
+		return d.startInput(modeNewProject, "top-level task", "")
 	case "n":
-		if d.pane == paneProjects {
-			return d.startInput(modeNewProject, "project name", "")
+		if t, ok := d.currentTask(); ok {
+			return d.startInput(modeNewTask, "child of "+t.Title, "")
 		}
-		if _, ok := d.currentProject(); ok {
-			return d.startInput(modeNewTask, "task title", "")
-		}
+		return d.startInput(modeNewProject, "top-level task", "")
 	case "e":
-		if d.pane == paneProjects {
-			if p, ok := d.currentProject(); ok {
-				return d.startInput(modeRenameProject, "project name", p.Name)
-			}
-		} else if t, ok := d.currentTask(); ok {
+		if t, ok := d.currentTask(); ok {
 			return d.startInput(modeRenameTask, "task title", t.Title)
 		}
 	case "d":
@@ -277,16 +281,10 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 	case "enter", "f", " ", "space":
 		if d.hasActive {
 			var task *store.Task
-			if d.pane == paneTasks {
-				if t, ok := d.currentTask(); ok {
-					task = &t
-				}
+			if t, ok := d.currentTask(); ok {
+				task = &t
 			}
 			return func() tea.Msg { return resumeSessionMsg{task: task} }
-		}
-		if d.pane == paneProjects && msg.String() != "f" {
-			d.pane = paneTasks
-			return nil
 		}
 		var task *store.Task
 		if t, ok := d.currentTask(); ok {
@@ -304,35 +302,52 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (d *dashboard) move(delta int) {
-	if d.pane == paneProjects {
-		if len(d.projects) == 0 {
-			return
+	t, ok := d.currentTask()
+	if !ok {
+		return
+	}
+	siblings := d.siblingTasks(t.ParentID)
+	if len(siblings) == 0 {
+		return
+	}
+	idx := 0
+	for i, sibling := range siblings {
+		if sibling.ID == t.ID {
+			idx = i
+			break
 		}
-		d.selProj = clampInt(d.selProj+delta, 0, len(d.projects)-1)
-		d.selTask = 0
-		d.reloadTasks()
+	}
+	idx = clampInt(idx+delta, 0, len(siblings)-1)
+	d.selectTask(siblings[idx].ID)
+}
+
+func (d *dashboard) moveToParent() {
+	t, ok := d.currentTask()
+	if !ok || t.ParentID == nil {
 		return
 	}
-	if len(d.tasks) == 0 {
+	d.selectTask(*t.ParentID)
+}
+
+func (d *dashboard) moveToFirstChild() {
+	t, ok := d.currentTask()
+	if !ok {
 		return
 	}
-	d.selTask = clampInt(d.selTask+delta, 0, len(d.tasks)-1)
+	children := d.childTasks(t.ID)
+	if len(children) == 0 {
+		return
+	}
+	d.selectTask(children[0].ID)
 }
 
 func (d *dashboard) archiveSelected() {
-	if d.pane == paneProjects {
-		if p, ok := d.currentProject(); ok {
-			_ = d.store.SetProjectArchived(p.ID, true)
-			d.reload()
-		}
-		return
-	}
 	if t, ok := d.currentTask(); ok {
 		if d.tracking && d.trackTaskID == t.ID {
 			d.stopTracking()
 		}
 		_ = d.store.SetTaskArchived(t.ID, true)
-		d.reloadTasks()
+		d.reload()
 	}
 }
 
@@ -342,7 +357,7 @@ func (d *dashboard) toggleDone(t store.Task) {
 		status = "open"
 	}
 	_ = d.store.SetTaskStatus(t.ID, status)
-	d.reloadTasks()
+	d.reload()
 }
 
 func (d *dashboard) toggleTracking(t store.Task) {
@@ -382,21 +397,7 @@ func (d *dashboard) renderBody(width, height int) string {
 		return "loading..."
 	}
 
-	projW := width / 4
-	if projW < 16 {
-		projW = 16
-	}
-	if projW > 28 {
-		projW = 28
-	}
-	taskW := width - projW - 1
-	if taskW < 20 {
-		taskW = 20
-	}
-
-	projects := d.renderProjects(projW, height)
-	tasks := d.renderTasks(taskW, height)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, projects, tasks)
+	body := d.renderTasks(width, height)
 
 	out := body
 	if d.err != nil {
@@ -414,10 +415,11 @@ func (d *dashboard) actionHints() []string {
 	}
 	hints := []string{
 		d.styles.helpEntry("↑↓", "move"),
-		d.styles.helpEntry("←→", "column"),
+		d.styles.helpEntry("←→", "level"),
 		d.styles.helpEntry("enter/f", "focus"),
 		d.styles.helpEntry("t", "track"),
-		d.styles.helpEntry("n", "new"),
+		d.styles.helpEntry("n", "child"),
+		d.styles.helpEntry("N", "top task"),
 		d.styles.helpEntry("e", "rename"),
 		d.styles.helpEntry("x", "done"),
 		d.styles.helpEntry("d", "archive"),
@@ -444,15 +446,10 @@ func (d *dashboard) infoHints() []string {
 		}
 		hints = append(hints, s.Break.Render("↻ resume available")+" "+s.Dim.Render(label))
 	}
-	if d.pane == paneProjects {
-		if p, ok := d.currentProject(); ok {
-			hints = append(hints, s.Dim.Render("project")+" "+s.StatValue.Render(p.Name)+
-				s.Dim.Render(fmt.Sprintf(" · %d tasks", len(d.tasks))))
-		}
-	} else if t, ok := d.currentTask(); ok {
+	if t, ok := d.currentTask(); ok {
 		line := s.Dim.Render("task") + " " + s.StatValue.Render(t.Title)
-		if p, ok := d.currentProject(); ok {
-			line += s.Dim.Render(" · ") + s.Subtitle.Render(p.Name)
+		if t.ProjectName != "" {
+			line += s.Dim.Render(" · ") + s.Subtitle.Render(t.ProjectName)
 		}
 		total := d.workSecs[t.ID]
 		if d.tracking && d.trackTaskID == t.ID {
@@ -480,7 +477,7 @@ func (d *dashboard) renderProjects(w, h int) string {
 		dot := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Color)).Render("●")
 		label := p.Name
 		if i == d.selProj && d.pane == paneProjects {
-			label = d.styles.ItemSel.Render(" "+p.Name+" ")
+			label = d.styles.ItemSel.Render(" " + p.Name + " ")
 		} else if d.pane != paneProjects {
 			label = d.styles.Dim.Render(label)
 		} else {
@@ -496,27 +493,95 @@ func (d *dashboard) renderProjects(w, h int) string {
 }
 
 func (d *dashboard) renderTasks(w, h int) string {
-	heading := "Tasks"
-	if p, ok := d.currentProject(); ok {
-		heading = p.Name
+	columns := d.taskColumns()
+	if len(columns) == 0 {
+		title := d.renderColumnTitle("Tasks", true)
+		content := title + "\n" + strings.Join([]string{
+			d.styles.Dim.Render("no tasks"),
+			d.styles.Dim.Render("N to create a top-level task"),
+		}, "\n")
+		if d.mode == modeNewProject || d.mode == modeNewTask || d.mode == modeRenameProject || d.mode == modeRenameTask {
+			content += "\n\n" + d.input.View()
+		}
+		return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
 	}
-	title := d.renderColumnTitle(heading, d.pane == paneTasks)
+
+	colW := w
+	if len(columns) > 1 {
+		colW = w / len(columns)
+		if colW > 30 {
+			colW = 30
+		}
+	}
+	if colW < 18 {
+		colW = 18
+	}
+
+	var rendered []string
+	for i, col := range columns {
+		rendered = append(rendered, d.renderTaskColumn(i, colW, h, col))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+}
+
+type taskColumn struct {
+	title string
+	tasks []store.Task
+	depth int
+}
+
+func (d *dashboard) taskColumns() []taskColumn {
+	if len(d.tasks) == 0 {
+		return nil
+	}
+	path := d.selectedPath()
+	if len(path) == 0 {
+		return []taskColumn{{title: "Tasks", tasks: d.siblingTasks(nil), depth: 0}}
+	}
+
+	var cols []taskColumn
+	var parentID *int64
+	for depth, task := range path {
+		title := "Tasks"
+		if depth > 0 {
+			title = path[depth-1].Title
+		}
+		cols = append(cols, taskColumn{
+			title: title,
+			tasks: d.siblingTasks(parentID),
+			depth: depth,
+		})
+		id := task.ID
+		parentID = &id
+	}
+
+	if children := d.childTasks(path[len(path)-1].ID); len(children) > 0 {
+		cols = append(cols, taskColumn{
+			title: path[len(path)-1].Title,
+			tasks: children,
+			depth: len(path),
+		})
+	}
+	return cols
+}
+
+func (d *dashboard) renderTaskColumn(idx, w, h int, col taskColumn) string {
+	active := d.activeColumnDepth() == col.depth
+	title := d.renderColumnTitle(col.title, active)
 
 	var lines []string
-	if len(d.projects) == 0 {
-		lines = append(lines, d.styles.Dim.Render("create a project first"))
-	} else if len(d.tasks) == 0 {
+	if len(col.tasks) == 0 {
 		lines = append(lines, d.styles.Dim.Render("no tasks"))
-		lines = append(lines, d.styles.Dim.Render("n to add"))
+		lines = append(lines, d.styles.Dim.Render("N to create a top-level task"))
 	}
-	for i, t := range d.tasks {
-		lines = append(lines, d.renderTaskLine(i, t, w))
+	for _, t := range col.tasks {
+		lines = append(lines, d.renderTaskLine(t, w, active))
 	}
-	if d.mode == modeNewTask || d.mode == modeRenameTask {
+	if active && (d.mode == modeNewProject || d.mode == modeNewTask || d.mode == modeRenameProject || d.mode == modeRenameTask) {
 		lines = append(lines, "", d.input.View())
 	}
 	content := title + "\n" + strings.Join(lines, "\n")
-	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
+	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1, 0, 0).Render(content)
 }
 
 func (d *dashboard) renderColumnTitle(label string, active bool) string {
@@ -526,7 +591,7 @@ func (d *dashboard) renderColumnTitle(label string, active bool) string {
 	return d.styles.Dim.Render(label)
 }
 
-func (d *dashboard) renderTaskLine(i int, t store.Task, w int) string {
+func (d *dashboard) renderTaskLine(t store.Task, w int, active bool) string {
 	check := "○"
 	if t.Status == "done" {
 		check = "✓"
@@ -541,6 +606,9 @@ func (d *dashboard) renderTaskLine(i int, t store.Task, w int) string {
 	dur := formatDur(total + live)
 
 	name := t.Title
+	if t.HasChildren {
+		name += " ›"
+	}
 	prefix := check + " "
 	line := prefix + name
 
@@ -549,7 +617,7 @@ func (d *dashboard) renderTaskLine(i int, t store.Task, w int) string {
 		right = d.styles.Work.Render("● REC " + formatClock(live))
 	}
 
-	if i == d.selTask && d.pane == paneTasks {
+	if active && d.isSelected(t.ID) {
 		line = d.styles.ItemSel.Render(" " + prefix + name + " ")
 	} else if t.Status == "done" {
 		line = d.styles.Dim.Render(line)
@@ -557,6 +625,82 @@ func (d *dashboard) renderTaskLine(i int, t store.Task, w int) string {
 		line = d.styles.Item.Render(line)
 	}
 	return line + "  " + right
+}
+
+func (d *dashboard) activeColumnDepth() int {
+	if t, ok := d.currentTask(); ok {
+		return t.Depth
+	}
+	return 0
+}
+
+func (d *dashboard) selectedPath() []store.Task {
+	t, ok := d.currentTask()
+	if !ok {
+		return nil
+	}
+	byID := map[int64]store.Task{}
+	for _, task := range d.tasks {
+		byID[task.ID] = task
+	}
+	var reversed []store.Task
+	for {
+		reversed = append(reversed, t)
+		if t.ParentID == nil {
+			break
+		}
+		parent, ok := byID[*t.ParentID]
+		if !ok {
+			break
+		}
+		t = parent
+	}
+	path := make([]store.Task, len(reversed))
+	for i := range reversed {
+		path[len(reversed)-1-i] = reversed[i]
+	}
+	return path
+}
+
+func (d *dashboard) siblingTasks(parentID *int64) []store.Task {
+	var out []store.Task
+	for _, t := range d.tasks {
+		if sameTaskParent(t.ParentID, parentID) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (d *dashboard) childTasks(parentID int64) []store.Task {
+	var out []store.Task
+	for _, t := range d.tasks {
+		if t.ParentID != nil && *t.ParentID == parentID {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (d *dashboard) selectTask(id int64) {
+	for i, t := range d.tasks {
+		if t.ID == id {
+			d.selTask = i
+			return
+		}
+	}
+}
+
+func (d *dashboard) isSelected(id int64) bool {
+	t, ok := d.currentTask()
+	return ok && t.ID == id
+}
+
+func sameTaskParent(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func (d *dashboard) escIsLocal() bool {

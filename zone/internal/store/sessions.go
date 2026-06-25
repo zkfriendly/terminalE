@@ -151,7 +151,7 @@ func (s *Store) EndSession(id int64, status string) error {
 func (s *Store) RecentSessions(limit int) ([]SessionSummary, error) {
 	rows, err := s.db.Query(`
 		SELECT s.id, s.started_at, s.ended_at, s.status, s.work_sec, s.break_sec, s.total_sec,
-		       COALESCE(t.title, ''), COALESCE(p.name, ''), COALESCE(p.color, ''),
+		       COALESCE(t.id, 0), COALESCE(t.title, ''), COALESCE(p.color, ''),
 		       COALESCE((SELECT SUM(e.ended_at - e.started_at) FROM entries e
 		                 WHERE e.session_id = s.id AND e.kind = 'work' AND e.ended_at IS NOT NULL), 0),
 		       COALESCE(s.ended_at, strftime('%s','now')) - s.started_at,
@@ -167,21 +167,33 @@ func (s *Store) RecentSessions(limit int) ([]SessionSummary, error) {
 	defer rows.Close()
 
 	var out []SessionSummary
+	var taskIDs []int64
 	for rows.Next() {
 		var ss SessionSummary
 		var started int64
+		var taskID int64
 		var ended sql.NullInt64
 		if err := rows.Scan(
 			&ss.ID, &started, &ended, &ss.Status, &ss.WorkSec, &ss.BreakSec, &ss.TotalSec,
-			&ss.TaskTitle, &ss.ProjectName, &ss.ProjectColor, &ss.WorkedSec, &ss.WallSec, &ss.NoteCount,
+			&taskID, &ss.TaskTitle, &ss.ProjectColor, &ss.WorkedSec, &ss.WallSec, &ss.NoteCount,
 		); err != nil {
 			return nil, err
 		}
 		ss.StartedAt = toTime(started)
 		ss.EndedAt = toTimePtr(ended)
 		out = append(out, ss)
+		taskIDs = append(taskIDs, taskID)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i, taskID := range taskIDs {
+		if taskID != 0 {
+			out[i].ProjectName = s.taskParentPath(taskID)
+		}
+	}
+	return out, nil
 }
 
 // SessionSummary is a session enriched for display.

@@ -186,8 +186,8 @@ func TestDashboardShowsResumeBanner(t *testing.T) {
 	if !strings.Contains(out, "resume available") || !strings.Contains(out, "Half-done") {
 		t.Fatalf("expected resume info in bottom bar:\n%s", out)
 	}
-	if !strings.Contains(out, "project") || !strings.Contains(out, "tasks") {
-		t.Fatalf("expected selected project info in bottom bar:\n%s", out)
+	if !strings.Contains(out, "task") || !strings.Contains(out, "Demo") {
+		t.Fatalf("expected selected task info in bottom bar:\n%s", out)
 	}
 
 	// Resume last session with R.

@@ -18,22 +18,28 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 
 // Project is a top-level grouping of tasks.
 type Project struct {
-	ID        int64
-	Name      string
-	Color     string
-	Archived  bool
-	CreatedAt time.Time
+	ID         int64
+	Name       string
+	Color      string
+	Archived   bool
+	CreatedAt  time.Time
+	RootTaskID int64
 }
 
-// Task is a unit of work belonging to a project.
+// Task is a unit of work in a nested task tree. ProjectID remains as the
+// internal root container for colors and compatibility with existing data.
 type Task struct {
 	ID          int64
 	ProjectID   int64
+	ParentID    *int64
 	Title       string
 	Status      string
 	Archived    bool
 	CreatedAt   time.Time
-	ProjectName string // populated by joins where convenient
+	ProjectName string // ancestor path, populated by joins where convenient
+	Color       string
+	Depth       int
+	HasChildren bool
 }
 
 // Session is a general pomodoro focus session. TaskID is the *current* task the

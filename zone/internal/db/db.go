@@ -77,6 +77,8 @@ func migrate(database *sql.DB) error {
 		`ALTER TABLE session_notes ADD COLUMN actionables_json TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE session_notes ADD COLUMN actionables_extracted_at INTEGER`,
 		`ALTER TABLE session_notes ADD COLUMN actionables_extract_version INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tasks ADD COLUMN parent_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE`,
+		`ALTER TABLE projects ADD COLUMN root_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL`,
 	}
 	for _, q := range alters {
 		if _, err := database.Exec(q); err != nil {
@@ -89,7 +91,77 @@ func migrate(database *sql.DB) error {
 	if _, err := database.Exec(`UPDATE session_notes SET updated_at = created_at WHERE updated_at = 0`); err != nil {
 		return err
 	}
+	if _, err := database.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)`); err != nil {
+		return err
+	}
+	if err := backfillRootTasks(database); err != nil {
+		return err
+	}
 	return makeSessionTaskNullable(database)
+}
+
+func backfillRootTasks(database *sql.DB) error {
+	rows, err := database.Query(`
+		SELECT id, name, archived, created_at
+		FROM projects
+		WHERE root_task_id IS NULL`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type project struct {
+		id, created int64
+		name        string
+		archived    bool
+	}
+	var projects []project
+	for rows.Next() {
+		var p project
+		if err := rows.Scan(&p.id, &p.name, &p.archived, &p.created); err != nil {
+			return err
+		}
+		projects = append(projects, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, p := range projects {
+		tx, err := database.Begin()
+		if err != nil {
+			return err
+		}
+		res, err := tx.Exec(
+			`INSERT INTO tasks (project_id, parent_id, title, status, archived, created_at)
+			 VALUES (?, NULL, ?, 'open', ?, ?)`,
+			p.id, p.name, p.archived, p.created,
+		)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		rootID, err := res.LastInsertId()
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE projects SET root_task_id = ? WHERE id = ?`, rootID, p.id); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err := tx.Exec(
+			`UPDATE tasks SET parent_id = ? WHERE project_id = ? AND id != ? AND parent_id IS NULL`,
+			rootID, p.id, rootID,
+		); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // makeSessionTaskNullable rebuilds the sessions table so task_id is nullable (a

@@ -9,18 +9,18 @@ import (
 
 // SessionNote is a free-form note taken during a focus session.
 type SessionNote struct {
-	ID                   int64
-	SessionID            int64
-	Body                 string
-	Title                string // LLM-generated short label
-	Emoji                string // LLM-generated emoji
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	ActionablesScannedAt   *time.Time
-	HasActionables           bool
-	ActionablesScanVersion   int
-	ActionablesJSON          string
-	ActionablesExtractedAt   *time.Time
+	ID                        int64
+	SessionID                 int64
+	Body                      string
+	Title                     string // LLM-generated short label
+	Emoji                     string // LLM-generated emoji
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	ActionablesScannedAt      *time.Time
+	HasActionables            bool
+	ActionablesScanVersion    int
+	ActionablesJSON           string
+	ActionablesExtractedAt    *time.Time
 	ActionablesExtractVersion int
 }
 
@@ -185,7 +185,7 @@ func (s *Store) ListAllNotes(limit int) ([]GlobalNote, error) {
 		       sn.actionables_scan_version, sn.actionables_json, sn.actionables_extracted_at,
 		       sn.actionables_extract_version,
 		       s.started_at,
-		       COALESCE(t.title, ''), COALESCE(p.name, '')
+		       COALESCE(t.id, 0), COALESCE(t.title, '')
 		FROM session_notes sn
 		JOIN sessions s ON s.id = sn.session_id
 		LEFT JOIN tasks t ON t.id = s.task_id
@@ -198,16 +198,18 @@ func (s *Store) ListAllNotes(limit int) ([]GlobalNote, error) {
 	defer rows.Close()
 
 	var out []GlobalNote
+	var taskIDs []int64
 	for rows.Next() {
 		var n GlobalNote
 		var created, updated int64
 		var scanned, extracted sql.NullInt64
 		var started int64
+		var taskID int64
 		if err := rows.Scan(
 			&n.ID, &n.SessionID, &n.Body, &n.Title, &n.Emoji,
 			&created, &updated, &scanned, &n.HasActionables, &n.ActionablesScanVersion,
 			&n.ActionablesJSON, &extracted, &n.ActionablesExtractVersion,
-			&started, &n.TaskTitle, &n.ProjectName,
+			&started, &taskID, &n.TaskTitle,
 		); err != nil {
 			return nil, err
 		}
@@ -217,6 +219,16 @@ func (s *Store) ListAllNotes(limit int) ([]GlobalNote, error) {
 		n.ActionablesExtractedAt = toTimePtr(extracted)
 		n.SessionStarted = toTime(started)
 		out = append(out, n)
+		taskIDs = append(taskIDs, taskID)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i, taskID := range taskIDs {
+		if taskID != 0 {
+			out[i].ProjectName = s.taskParentPath(taskID)
+		}
+	}
+	return out, nil
 }
