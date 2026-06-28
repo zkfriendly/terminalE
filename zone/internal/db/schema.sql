@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+-- idx_tasks_parent is created in migrate() after parent_id is added to older DBs.
 
 CREATE TABLE IF NOT EXISTS sessions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
