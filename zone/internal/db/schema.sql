@@ -5,18 +5,21 @@ CREATE TABLE IF NOT EXISTS projects (
     name       TEXT    NOT NULL,
     color      TEXT    NOT NULL DEFAULT '',
     archived   INTEGER NOT NULL DEFAULT 0,
+    root_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    parent_id  INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
     title      TEXT    NOT NULL,
     status     TEXT    NOT NULL DEFAULT 'open',
     archived   INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,

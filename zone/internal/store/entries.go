@@ -43,9 +43,18 @@ func (s *Store) AddEntry(taskID int64, sessionID *int64, kind string, start, end
 // TaskWorkSeconds returns total completed work-seconds per task id.
 func (s *Store) TaskWorkSeconds() (map[int64]int, error) {
 	rows, err := s.db.Query(`
-		SELECT task_id, COALESCE(SUM(ended_at - started_at), 0)
-		FROM entries
-		WHERE kind = 'work' AND ended_at IS NOT NULL
+		WITH RECURSIVE rollup(entry_id, task_id, seconds) AS (
+			SELECT e.id, e.task_id, e.ended_at - e.started_at
+			FROM entries e
+			WHERE e.kind = 'work' AND e.ended_at IS NOT NULL
+			UNION ALL
+			SELECT r.entry_id, t.parent_id, r.seconds
+			FROM rollup r
+			JOIN tasks t ON t.id = r.task_id
+			WHERE t.parent_id IS NOT NULL
+		)
+		SELECT task_id, COALESCE(SUM(seconds), 0)
+		FROM rollup
 		GROUP BY task_id`)
 	if err != nil {
 		return nil, err

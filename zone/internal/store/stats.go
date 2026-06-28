@@ -81,14 +81,23 @@ func (s *Store) TaskBreakdown(t time.Time, limit int) ([]TaskStat, error) {
 	defer rows.Close()
 
 	var out []TaskStat
+	var taskIDs []int64
 	for rows.Next() {
 		var ts TaskStat
 		if err := rows.Scan(&ts.TaskID, &ts.TaskTitle, &ts.ProjectName, &ts.Color, &ts.WorkSec); err != nil {
 			return nil, err
 		}
 		out = append(out, ts)
+		taskIDs = append(taskIDs, ts.TaskID)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i, taskID := range taskIDs {
+		out[i].ProjectName = s.taskParentPath(taskID)
+	}
+	return out, nil
 }
 
 // Streak returns the number of consecutive days (ending today or yesterday) that
