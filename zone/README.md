@@ -57,40 +57,40 @@ zone uses an **OS-style shell** outside the focus zone: a top tab bar lists
 Work, Stats, History, and Config; the main area shows the active screen. A status
 bar at the bottom shows key hints; the title row shows the clock and session state.
 
-| Key | Action |
-| --- | ------ |
-| `tab` | Switch focus between the tab bar and main content |
-| `←`/`→`, `h/l` | Move between tabs (when the tab bar is focused) |
-| `↑`/`↓`, `j/k` | Move selection in lists (also works on tabs) |
-| `enter` | Open the selected tab |
-| `esc` | Back one level (close menu → leave page → quit) |
+| Key            | Action                                            |
+| -------------- | ------------------------------------------------- |
+| `tab`          | Switch focus between the tab bar and main content |
+| `←`/`→`, `h/l` | Move between tabs (when the tab bar is focused)   |
+| `↑`/`↓`, `j/k` | Move selection in lists (also works on tabs)      |
+| `enter`        | Open the selected tab                             |
+| `esc`          | Back one level (close menu → leave page → quit)   |
 
 ### Work (projects & tasks)
 
-| Key | Action |
-| --- | ------ |
-| `←`/`→`, `h/l` | Switch between Projects and Tasks panes |
-| `↑`/`↓`, `j/k` | Move selection in the active pane |
+| Key                   | Action                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| `←`/`→`, `h/l`        | Switch between Projects and Tasks panes                                                |
+| `↑`/`↓`, `j/k`        | Move selection in the active pane                                                      |
 | `enter`, `f`, `space` | Start focus (Tasks pane), switch to Tasks (Projects pane), or resume a running session |
-| `R` | Resume the session you ended early (when the banner is shown) |
-| `n` | New project or task (depends on pane) |
-| `e` | Rename selected project or task |
-| `d` | Archive selected project or task |
-| `t` | Start/stop standalone time tracking on the selected task |
-| `x` | Mark task done / reopen |
-| `r` | Refresh projects, tasks, and session state |
+| `R`                   | Resume the session you ended early (when the banner is shown)                          |
+| `n`                   | New project or task (depends on pane)                                                  |
+| `e`                   | Rename selected project or task                                                        |
+| `d`                   | Archive selected project or task                                                       |
+| `t`                   | Start/stop standalone time tracking on the selected task                               |
+| `x`                   | Mark task done / reopen                                                                |
+| `r`                   | Refresh projects, tasks, and session state                                             |
 
 ### Focus zone
 
-| Key       | Action                                            |
-| --------- | ------------------------------------------------- |
-| `space`   | Pause / resume                                    |
-| `t`       | Switch the current task (or "just focus")           |
-| `n`       | Take session notes (vim-style editor, `:wq` to save) |
-| `s`       | Skip the current block (during prepare: start now) |
-| `b`       | Background: leave the session running, go to dashboard |
-| `E`       | End the session early (stops the daemon; confirm with `y`) |
-| `esc`     | Background the session **and quit** zone (works from any screen) |
+| Key     | Action                                                           |
+| ------- | ---------------------------------------------------------------- |
+| `space` | Pause / resume                                                   |
+| `t`     | Switch the current task (or "just focus")                        |
+| `n`     | Take session notes (vim-style editor, `:wq` to save)             |
+| `s`     | Skip the current block (during prepare: start now)               |
+| `b`     | Background: leave the session running, go to dashboard           |
+| `E`     | End the session early (stops the daemon; confirm with `y`)       |
+| `esc`   | Background the session **and quit** zone (works from any screen) |
 
 Closing the terminal (or `ctrl+c`) also just backgrounds the session — it keeps
 running.
@@ -135,18 +135,18 @@ to open the highlighted note for editing.
 While editing a note, search **inside** that note with vim-style **`/`** / **`?`**
 or **`ctrl+f`**, then **`n`** / **`N`** for next/previous match.
 
-| Key | Action |
-| --- | ------ |
-| `↑`/`↓`, `j/k` | Move in the note list |
-| `enter` | Open selected note |
-| `/` or `ctrl+f` | Search notes (LLM summary + chat) |
-| `↑`/`↓` or `tab` | Select a search result |
-| `enter` or `o` | Open highlighted search result |
+| Key                    | Action                                      |
+| ---------------------- | ------------------------------------------- |
+| `↑`/`↓`, `j/k`         | Move in the note list                       |
+| `enter`                | Open selected note                          |
+| `/` or `ctrl+f`        | Search notes (LLM summary + chat)           |
+| `↑`/`↓` or `tab`       | Select a search result                      |
+| `enter` or `o`         | Open highlighted search result              |
 | `/` or `?` or `ctrl+f` | Find text inside an open note (normal mode) |
-| `n` / `N` | Next / previous in-note match |
-| `t` | View extracted tasks (when available) |
-| `d` | Delete note |
-| `r` | Refresh |
+| `n` / `N`              | Next / previous in-note match               |
+| `t`                    | View extracted tasks (when available)       |
+| `d`                    | Delete note                                 |
+| `r`                    | Refresh                                     |
 
 Each session shows both **focus** time (active work, excluding pauses and
 breaks) and **wall** time (total clock time from start to end). Useful when you
@@ -157,12 +157,12 @@ pause/resume a lot and want to see how long a session really took.
 A scrollable list of every focus session (date, task or "general focus",
 focus time, wall time, and status).
 
-| Key       | Action          |
-| --------- | --------------- |
-| `↑` / `↓` | Select session  |
+| Key       | Action             |
+| --------- | ------------------ |
+| `↑` / `↓` | Select session     |
 | `n`       | View session notes |
-| `g` / `G` | Jump top/bottom |
-| `r`       | Refresh         |
+| `g` / `G` | Jump top/bottom    |
+| `r`       | Refresh            |
 
 ### Config
 
