@@ -10,15 +10,9 @@ import (
 )
 
 const (
-	paneProjects = 0
-	paneTasks    = 1
-)
-
-const (
 	modeNormal = iota
-	modeNewProject
+	modeNewSibling
 	modeNewTask
-	modeRenameProject
 	modeRenameTask
 )
 
@@ -29,13 +23,10 @@ type dashboard struct {
 
 	width, height int
 
-	projects []store.Project
 	tasks    []store.Task
 	workSecs map[int64]int
 
-	selProj int
 	selTask int
-	pane    int
 	mode    int
 	prompt  panelInput
 
@@ -65,7 +56,6 @@ func newDashboard(st *store.Store, s Styles) *dashboard {
 		styles:   s,
 		prompt:   newPanelInput("  ", "", 80),
 		workSecs: map[int64]int{},
-		pane:     paneTasks,
 		now:      time.Now(),
 	}
 	d.reload()
@@ -82,7 +72,6 @@ func (d *dashboard) reload() {
 	if d.selTask >= len(tasks) {
 		d.selTask = max(0, len(tasks)-1)
 	}
-	d.pane = paneTasks
 	if ws, err := d.store.TaskWorkSeconds(); err == nil {
 		d.workSecs = ws
 	}
@@ -133,13 +122,6 @@ func (d *dashboard) reloadTasks() {
 	}
 }
 
-func (d *dashboard) currentProject() (store.Project, bool) {
-	if d.selProj < len(d.projects) {
-		return d.projects[d.selProj], true
-	}
-	return store.Project{}, false
-}
-
 func (d *dashboard) currentTask() (store.Task, bool) {
 	if d.selTask < len(d.tasks) {
 		return d.tasks[d.selTask], true
@@ -188,12 +170,21 @@ func (d *dashboard) updateInput(msg tea.Msg) tea.Cmd {
 func (d *dashboard) commit(mode int, val string) tea.Cmd {
 	var selectID int64
 	switch mode {
-	case modeNewProject:
-		t, err := d.store.CreateRootTask(val)
-		if err != nil {
-			d.err = err
+	case modeNewSibling:
+		if t, ok := d.currentTask(); ok && t.ParentID != nil {
+			sibling, err := d.store.CreateChildTask(*t.ParentID, val)
+			if err != nil {
+				d.err = err
+			} else {
+				selectID = sibling.ID
+			}
 		} else {
-			selectID = t.ID
+			t, err := d.store.CreateRootTask(val)
+			if err != nil {
+				d.err = err
+			} else {
+				selectID = t.ID
+			}
 		}
 	case modeNewTask:
 		if t, ok := d.currentTask(); ok {
@@ -210,11 +201,6 @@ func (d *dashboard) commit(mode int, val string) tea.Cmd {
 			} else {
 				selectID = t.ID
 			}
-		}
-	case modeRenameProject:
-		if t, ok := d.currentTask(); ok {
-			_ = d.store.RenameTask(t.ID, val)
-			selectID = t.ID
 		}
 	case modeRenameTask:
 		if t, ok := d.currentTask(); ok {
@@ -249,7 +235,11 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 	case "down", "j":
 		d.move(1)
 	case "n":
-		return d.startInput(modeNewProject, "top-level task", "")
+		placeholder := "top-level task"
+		if t, ok := d.currentTask(); ok && t.ParentID != nil {
+			placeholder = "new task"
+		}
+		return d.startInput(modeNewSibling, placeholder, "")
 	case "N":
 		if t, ok := d.currentTask(); ok {
 			return d.startInput(modeNewTask, "child of "+t.Title, "")
@@ -408,7 +398,7 @@ func (d *dashboard) actionHints() []string {
 		d.styles.helpEntry("←→", "level"),
 		d.styles.helpEntry("enter/f", "focus"),
 		d.styles.helpEntry("t", "track"),
-		d.styles.helpEntry("n", "top task"),
+		d.styles.helpEntry("n", "new task"),
 		d.styles.helpEntry("N", "child"),
 		d.styles.helpEntry("e", "rename"),
 		d.styles.helpEntry("x", "done"),
@@ -456,41 +446,15 @@ func (d *dashboard) infoHints() []string {
 	return hints
 }
 
-func (d *dashboard) renderProjects(w, h int) string {
-	title := d.renderColumnTitle("Projects", d.pane == paneProjects)
-	var lines []string
-	if len(d.projects) == 0 {
-		lines = append(lines, d.styles.Dim.Render("no projects"))
-		lines = append(lines, d.styles.Dim.Render("n to create"))
-	}
-	for i, p := range d.projects {
-		dot := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Color)).Render("●")
-		label := p.Name
-		if i == d.selProj && d.pane == paneProjects {
-			label = d.styles.ItemSel.Render(" " + p.Name + " ")
-		} else if d.pane != paneProjects {
-			label = d.styles.Dim.Render(label)
-		} else {
-			label = d.styles.Item.Render(label)
-		}
-		lines = append(lines, dot+" "+label)
-	}
-	if d.mode == modeNewProject || d.mode == modeRenameProject {
-		lines = append(lines, "", d.prompt.View())
-	}
-	content := title + "\n" + strings.Join(lines, "\n")
-	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1, 0, 0).Render(content)
-}
-
 func (d *dashboard) renderTasks(w, h int) string {
 	columns := d.taskColumns()
 	if len(columns) == 0 {
 		title := d.renderColumnTitle("Tasks", true)
 		content := title + "\n" + strings.Join([]string{
 			d.styles.Dim.Render("no tasks"),
-			d.styles.Dim.Render("n to create a top-level task"),
+			d.styles.Dim.Render("n to create a task"),
 		}, "\n")
-		if d.mode == modeNewProject || d.mode == modeNewTask || d.mode == modeRenameProject || d.mode == modeRenameTask {
+		if d.mode == modeNewSibling || d.mode == modeNewTask || d.mode == modeRenameTask {
 			content += "\n\n" + d.prompt.View()
 		}
 		return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
@@ -562,12 +526,12 @@ func (d *dashboard) renderTaskColumn(idx, w, h int, col taskColumn) string {
 	var lines []string
 	if len(col.tasks) == 0 {
 		lines = append(lines, d.styles.Dim.Render("no tasks"))
-		lines = append(lines, d.styles.Dim.Render("n to create a top-level task"))
+		lines = append(lines, d.styles.Dim.Render("n to create a task"))
 	}
 	for _, t := range col.tasks {
 		lines = append(lines, d.renderTaskLine(t, w, active))
 	}
-	if active && (d.mode == modeNewProject || d.mode == modeNewTask || d.mode == modeRenameProject || d.mode == modeRenameTask) {
+	if active && (d.mode == modeNewSibling || d.mode == modeNewTask || d.mode == modeRenameTask) {
 		lines = append(lines, "", d.prompt.View())
 	}
 	content := title + "\n" + strings.Join(lines, "\n")

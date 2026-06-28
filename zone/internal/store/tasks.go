@@ -58,32 +58,6 @@ func (s *Store) GetTask(id int64) (Task, error) {
 	return t, nil
 }
 
-// ListTasks returns the direct children of a project's root task.
-func (s *Store) ListTasks(projectID int64, includeArchived bool) ([]Task, error) {
-	p, err := s.GetProject(projectID)
-	if err != nil {
-		return nil, err
-	}
-	if p.RootTaskID == 0 {
-		return nil, nil
-	}
-	return s.ListChildTasks(p.RootTaskID, includeArchived)
-}
-
-// ListChildTasks returns direct children of a task.
-func (s *Store) ListChildTasks(parentID int64, includeArchived bool) ([]Task, error) {
-	q := `
-		SELECT t.id, t.project_id, t.parent_id, t.title, t.status, t.archived,
-		       t.created_at, p.color
-		FROM tasks t JOIN projects p ON p.id = t.project_id
-		WHERE t.parent_id = ?`
-	if !includeArchived {
-		q += ` AND t.archived = 0`
-	}
-	q += ` ORDER BY t.archived ASC, t.id ASC`
-	return s.scanTasks(q, parentID)
-}
-
 // ListAllTasks returns every task in tree order. Used by the in-session task switcher.
 func (s *Store) ListAllTasks(includeArchived bool) ([]Task, error) {
 	return s.ListTaskTree(includeArchived)

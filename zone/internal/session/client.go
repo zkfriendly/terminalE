@@ -67,17 +67,6 @@ func (c *Client) Toggle() (Snapshot, error) { return c.do(Command{Op: OpToggle})
 // Skip skips the current block.
 func (c *Client) Skip() (Snapshot, error) { return c.do(Command{Op: OpSkip}) }
 
-// Track toggles an ambient layer by index.
-func (c *Client) Track(i int) (Snapshot, error) { return c.do(Command{Op: OpTrack, Index: i}) }
-
-// SetVolume sets playback volume (0..1).
-func (c *Client) SetVolume(v float64) (Snapshot, error) {
-	return c.do(Command{Op: OpVolume, Volume: v})
-}
-
-// Preview plays the start and end chimes so the user knows what to listen for.
-func (c *Client) Preview() (Snapshot, error) { return c.do(Command{Op: OpPreview}) }
-
 // SetTask switches the current task (0 = no task / just focus).
 func (c *Client) SetTask(taskID int64) (Snapshot, error) {
 	return c.do(Command{Op: OpSetTask, TaskID: taskID})

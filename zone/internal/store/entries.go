@@ -4,8 +4,7 @@ import "time"
 
 // Entry kinds.
 const (
-	KindWork  = "work"
-	KindBreak = "break"
+	KindWork = "work"
 )
 
 // StartEntry opens a live (open-ended) entry, e.g. standalone tracking. The

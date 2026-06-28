@@ -57,15 +57,14 @@ type Session struct {
 	Status     string // active | completed | abandoned
 }
 
-// Entry is a tracked span of time (work or break) optionally tied to a session.
+// Entry is a tracked span of work time optionally tied to a session.
 type Entry struct {
 	ID        int64
 	TaskID    int64
 	SessionID *int64
-	Kind      string // work | break
+	Kind      string // work
 	StartedAt time.Time
 	EndedAt   *time.Time
-	Note      string
 }
 
 func unix(t time.Time) int64 { return t.Unix() }

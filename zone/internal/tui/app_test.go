@@ -321,23 +321,19 @@ func TestNavFocusDoesNotMoveDashboard(t *testing.T) {
 
 	app.shell.focusNav = true
 	app.shell.navIdx = int(pageWork)
-	beforePane := app.dashboard.pane
-	beforeProj := app.dashboard.selProj
+	beforeTask := app.dashboard.selTask
 
 	app.Update(keyPress("right"))
 	if app.shell.navIdx != int(pageStats) {
 		t.Fatalf("expected nav to move to stats, got idx %d", app.shell.navIdx)
 	}
-	if app.dashboard.pane != beforePane {
-		t.Fatalf("page switcher right should not switch dashboard column (was %d, now %d)", beforePane, app.dashboard.pane)
-	}
-	if app.dashboard.selProj != beforeProj {
-		t.Fatalf("nav right should not move project selection (was %d, now %d)", beforeProj, app.dashboard.selProj)
+	if app.dashboard.selTask != beforeTask {
+		t.Fatalf("nav right should not move task selection (was %d, now %d)", beforeTask, app.dashboard.selTask)
 	}
 
 	app.Update(keyPress("down"))
-	if app.dashboard.selProj != beforeProj {
-		t.Fatalf("nav down should not move project selection (was %d, now %d)", beforeProj, app.dashboard.selProj)
+	if app.dashboard.selTask != beforeTask {
+		t.Fatalf("nav down should not move task selection (was %d, now %d)", beforeTask, app.dashboard.selTask)
 	}
 }
 

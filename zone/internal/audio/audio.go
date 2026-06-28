@@ -226,25 +226,6 @@ func (m *Manager) Chime(c Chime) {
 	})
 }
 
-// SetVolume updates playback volume (0..1) live across all layers.
-func (m *Manager) SetVolume(v float64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	v = clamp(v, 0, 1)
-	m.volume = v
-	if !m.ready {
-		return
-	}
-	speaker.Lock()
-	for _, t := range m.tracks {
-		if t.vol != nil {
-			t.vol.Volume = volumeToGain(v)
-			t.vol.Silent = v <= 0
-		}
-	}
-	speaker.Unlock()
-}
-
 // Volume returns the current volume (0..1).
 func (m *Manager) Volume() float64 {
 	m.mu.Lock()
@@ -261,13 +242,6 @@ func (m *Manager) Selection() map[string]bool {
 		out[t.id] = t.selected
 	}
 	return out
-}
-
-// Available reports whether audio output is working.
-func (m *Manager) Available() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.ensureSpeaker()
 }
 
 // Close releases the speaker.

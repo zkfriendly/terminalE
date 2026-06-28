@@ -17,6 +17,27 @@ func newTestStore(t *testing.T) *Store {
 	return New(database)
 }
 
+func projectRootChildren(s *Store, projectID int64, includeArchived bool) ([]Task, error) {
+	p, err := s.GetProject(projectID)
+	if err != nil {
+		return nil, err
+	}
+	if p.RootTaskID == 0 {
+		return nil, nil
+	}
+	all, err := s.ListTaskTree(includeArchived)
+	if err != nil {
+		return nil, err
+	}
+	var out []Task
+	for _, t := range all {
+		if t.ParentID != nil && *t.ParentID == p.RootTaskID {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
 func TestProjectTaskLifecycle(t *testing.T) {
 	s := newTestStore(t)
 
@@ -36,7 +57,7 @@ func TestProjectTaskLifecycle(t *testing.T) {
 		t.Fatalf("expected joined project name, got %q", task.ProjectName)
 	}
 
-	tasks, err := s.ListTasks(p.ID, false)
+	tasks, err := projectRootChildren(s, p.ID, false)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("list tasks: %v (n=%d)", err, len(tasks))
 	}
@@ -44,7 +65,7 @@ func TestProjectTaskLifecycle(t *testing.T) {
 	if err := s.SetTaskArchived(task.ID, true); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
-	tasks, _ = s.ListTasks(p.ID, false)
+	tasks, _ = projectRootChildren(s, p.ID, false)
 	if len(tasks) != 0 {
 		t.Fatalf("archived task should be hidden, got %d", len(tasks))
 	}

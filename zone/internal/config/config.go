@@ -1,5 +1,5 @@
 // Package config holds user-tunable settings for zone: the pomodoro session
-// shape and the ambient audio behaviour. Settings persist as JSON next to the
+// shape and ambient audio behaviour. Settings persist as JSON next to the
 // database in the user's config directory.
 package config
 
@@ -10,20 +10,12 @@ import (
 	"strings"
 )
 
-// AmbientMode selects what plays during work blocks.
-const (
-	AmbientOff    = "off"    // silence
-	AmbientNoise  = "noise"  // built-in generated layers (focus beats)
-	AmbientFolder = "folder" // loop audio files from a user folder ("study with me")
-)
-
 // Config is the full set of user preferences.
 type Config struct {
 	PrepareMinutes int             `json:"prepare_minutes"` // settle-in block before the first work block
 	WorkMinutes    int             `json:"work_minutes"`
 	BreakMinutes   int             `json:"break_minutes"`
 	TotalMinutes   int             `json:"total_minutes"`
-	AmbientMode    string          `json:"ambient_mode"`
 	AmbientFolder  string          `json:"ambient_folder"`
 	Volume         float64         `json:"volume"` // 0.0 (silent) .. 1.0 (full)
 	ChimesEnabled  bool            `json:"chimes_enabled"`
@@ -47,7 +39,6 @@ func Default() Config {
 		WorkMinutes:    50,
 		BreakMinutes:   10,
 		TotalMinutes:   240,
-		AmbientMode:    AmbientOff,
 		AmbientFolder:  "",
 		Volume:         0.6,
 		ChimesEnabled:  true,
@@ -141,9 +132,6 @@ func (c *Config) normalize() {
 	}
 	if c.Volume > 1 {
 		c.Volume = 1
-	}
-	if c.AmbientMode == "" {
-		c.AmbientMode = AmbientOff
 	}
 	if c.Layers == nil {
 		c.Layers = map[string]bool{"beat15": false, "beat45": false}

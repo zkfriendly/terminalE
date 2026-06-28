@@ -26,7 +26,7 @@ type shellNavItem struct {
 }
 
 var shellNavItems = []shellNavItem{
-	{label: "Work", desc: "projects & tasks"},
+	{label: "Work", desc: "tasks"},
 	{label: "Stats", desc: "focus overview"},
 	{label: "History", desc: "session log"},
 	{label: "Notes", desc: "all session notes"},

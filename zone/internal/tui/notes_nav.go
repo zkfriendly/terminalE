@@ -42,12 +42,3 @@ func (s *notesNavStack) peek() notesScreen {
 func (s notesNavStack) canPop() bool {
 	return len(s.frames) > 1
 }
-
-func (s notesNavStack) contains(frame notesScreen) bool {
-	for _, f := range s.frames {
-		if f == frame {
-			return true
-		}
-	}
-	return false
-}

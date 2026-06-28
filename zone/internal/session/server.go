@@ -202,12 +202,6 @@ func (s *server) handle(cmd Command) Snapshot {
 				s.handleTransition(tr)
 			}
 		}
-	case OpTrack:
-		s.audio.ToggleTrack(cmd.Index)
-	case OpVolume:
-		s.audio.SetVolume(cmd.Volume)
-	case OpPreview:
-		s.previewChimes()
 	case OpSetTask:
 		if !s.finished {
 			s.setTask(cmd.TaskID)
@@ -231,16 +225,6 @@ func (s *server) handle(cmd Command) Snapshot {
 	}
 	s.persistRuntime()
 	return s.snapshotLocked()
-}
-
-// previewChimes plays the work-start chime and, shortly after, the session-done
-// chime, so the user learns what each transition sounds like. Non-blocking.
-func (s *server) previewChimes() {
-	go func() {
-		s.audio.Chime(audio.ChimeWork)
-		time.Sleep(1300 * time.Millisecond)
-		s.audio.Chime(audio.ChimeDone)
-	}()
 }
 
 // setTask switches the current task, attributing the work done since the last
@@ -348,11 +332,6 @@ func (s *server) snapshotLocked() Snapshot {
 		today += s.engine.Elapsed() - s.segCredited
 	}
 
-	var tracks []TrackInfo
-	for _, t := range s.audio.Tracks() {
-		tracks = append(tracks, TrackInfo{ID: t.ID, Label: t.Label, Enabled: t.Enabled})
-	}
-
 	var curTaskID int64
 	if s.hasTask {
 		curTaskID = s.task.ID
@@ -378,8 +357,6 @@ func (s *server) snapshotLocked() Snapshot {
 		Accrued:       s.accrued,
 		WallSec:       wall,
 		TodayTotal:    today,
-		Volume:        s.audio.Volume(),
-		Tracks:        tracks,
 	}
 }
 

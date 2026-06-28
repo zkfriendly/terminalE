@@ -73,7 +73,7 @@ bar at the bottom shows key hints; the title row shows the clock and session sta
 | `↑`/`↓`, `j/k`        | Move selection in the active column                                                  |
 | `enter`, `f`, `space` | Start focus on selected task, or resume a running session                            |
 | `R`                   | Resume the session you ended early (when the banner is shown)                          |
-| `n`                   | New top-level task                                                                   |
+| `n`                   | New task at the current level (sibling of the selection)                             |
 | `N`                   | New child task under the selected task                                               |
 | `e`                   | Rename selected project or task                                                        |
 | `d`                   | Archive selected project or task                                                       |
@@ -171,8 +171,7 @@ focus time, wall time, and status).
 | --------- | ------------------------------- |
 | `↑` / `↓` | Select a setting                |
 | `enter`   | Edit numbers and text fields    |
-| `space`   | Toggle booleans / cycle choices |
-| `+` / `-` | Adjust volume in 0.1 steps      |
+| `space`   | Toggle booleans                 |
 
 ## Background focus daemon
 

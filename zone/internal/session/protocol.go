@@ -16,9 +16,6 @@ const (
 	OpStatus  = "status"  // fetch current snapshot
 	OpToggle  = "toggle"  // pause/resume
 	OpSkip    = "skip"    // skip current block
-	OpTrack   = "track"   // toggle an ambient layer (by Index)
-	OpVolume  = "volume"  // set volume (Volume 0..1)
-	OpPreview = "preview" // play the start + end chimes as a demo
 	OpSetTask = "settask" // switch the current task (TaskID, 0 = no task)
 	OpAdjust  = "adjust"  // scrub block time (Delta seconds; +rewind, −skip)
 	OpEnd     = "end"     // end the session and stop the daemon
@@ -26,18 +23,9 @@ const (
 
 // Command is a request sent from the TUI client to the daemon.
 type Command struct {
-	Op     string  `json:"op"`
-	Index  int     `json:"index,omitempty"`
-	Volume float64 `json:"volume,omitempty"`
-	TaskID int64   `json:"task_id,omitempty"`
-	Delta  int     `json:"delta,omitempty"` // seconds; +rewind, −skip ahead
-}
-
-// TrackInfo mirrors an ambient layer's state for display.
-type TrackInfo struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	Enabled bool   `json:"enabled"`
+	Op     string `json:"op"`
+	TaskID int64  `json:"task_id,omitempty"`
+	Delta  int    `json:"delta,omitempty"` // seconds; +rewind, −skip ahead
 }
 
 // Snapshot is the daemon's current state, returned for every command.
@@ -55,9 +43,7 @@ type Snapshot struct {
 	Finished      bool        `json:"finished"`
 	Accrued       int         `json:"accrued"`     // active focus seconds this session (excludes pauses)
 	WallSec       int         `json:"wall_sec"`    // wall-clock seconds since the session started
-	TodayTotal    int         `json:"today_total"` // total work seconds today
-	Volume        float64     `json:"volume"`
-	Tracks        []TrackInfo `json:"tracks"`
+	TodayTotal    int     `json:"today_total"` // total work seconds today
 }
 
 // SocketPath returns the daemon's Unix socket path.

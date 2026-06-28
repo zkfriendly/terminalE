@@ -87,12 +87,6 @@ func TestDaemonRoundtrip(t *testing.T) {
 		t.Fatalf("expected 1 cycle, got %d", snap.Cycles)
 	}
 
-	// Toggling an ambient layer should flip its reported state.
-	snap, _ = client.Track(1)
-	if len(snap.Tracks) < 2 || !snap.Tracks[1].Enabled {
-		t.Fatalf("expected track 1 enabled: %+v", snap.Tracks)
-	}
-
 	// Skip work -> break, then skip break -> finished.
 	snap, _ = client.Skip()
 	if snap.Phase != "break" {

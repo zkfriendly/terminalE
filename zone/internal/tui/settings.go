@@ -22,7 +22,6 @@ type settingField struct {
 	section string
 	label   string
 	kind    settingKind
-	choices []string
 }
 
 // settingsView edits config.json from the terminal.
