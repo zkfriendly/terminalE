@@ -386,7 +386,7 @@ func TestSettingsView(t *testing.T) {
 	}
 	out := app.View()
 	cfgPath, _ := config.Path() // platform-specific config.json location shown in the view
-	for _, want := range []string{"ZONE", "Config", cfgPath, "Work (min)", "Local LLM URL"} {
+	for _, want := range []string{"ZONE", "Config", truncate(cfgPath, 60), "Work (min)", "Local LLM URL"} {
 		if !strings.Contains(out.Content, want) {
 			t.Fatalf("settings render missing %q:\n%s", want, out.Content)
 		}
