@@ -6,7 +6,9 @@ require (
 	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/lipgloss/v2 v2.0.4
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/atotto/clipboard v0.1.4
+	github.com/clipperhouse/displaywidth v0.11.0
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/rivo/uniseg v0.4.7
 	modernc.org/sqlite v1.52.0
@@ -19,7 +21,6 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
-	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/oto/v3 v3.3.2 // indirect

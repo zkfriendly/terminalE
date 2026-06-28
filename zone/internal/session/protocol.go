@@ -1,7 +1,8 @@
 // Package session implements zone's focus daemon: a background process that owns
 // the running pomodoro engine and audio, so a focus session keeps running (and
 // playing) even after the terminal that started it is closed. The TUI talks to
-// the daemon over a Unix socket and renders snapshots of its state.
+// the daemon over a local socket — a Unix-domain socket on macOS/Linux, a named
+// pipe on Windows (see transport_*.go) — and renders snapshots of its state.
 package session
 
 import (
