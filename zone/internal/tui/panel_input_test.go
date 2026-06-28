@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/zkfriendly/zone/internal/store"
 )
 
 func TestPanelInputCapturesTyping(t *testing.T) {
@@ -47,6 +48,62 @@ func TestPanelInputSubmit(t *testing.T) {
 	_, act := p.handleMsg(keyPress("enter"))
 	if act != panelInputSubmit {
 		t.Fatalf("expected submit, got %d", act)
+	}
+}
+
+func TestNotesSearchTabToResultsThenNavigate(t *testing.T) {
+	var s notesSearchState
+	s.open()
+	s.results = []store.GlobalNote{
+		{SessionNote: store.SessionNote{ID: 1, Title: "a"}},
+		{SessionNote: store.SessionNote{ID: 2, Title: "b"}},
+	}
+	s.resultCursor = 0
+	s.focus = searchFocusChat
+	s.chatInput.markFocused()
+
+	s.handleMsg(keyPress("tab"), nil, nil, nil)
+	if s.focus != searchFocusResults {
+		t.Fatalf("expected results focus after tab, got %d", s.focus)
+	}
+	if s.inputFocused() {
+		t.Fatal("expected inputs blurred after tab to results")
+	}
+
+	s.handleMsg(keyPress("down"), nil, nil, nil)
+	if s.resultCursor != 1 {
+		t.Fatalf("expected cursor 1 after down, got %d", s.resultCursor)
+	}
+}
+
+func TestNotesSearchAnswerDoesNotStealResultsFocus(t *testing.T) {
+	var s notesSearchState
+	s.active = true
+	s.focus = searchFocusResults
+	s.reqID = 1
+	s.results = []store.GlobalNote{
+		{SessionNote: store.SessionNote{ID: 1, Title: "a"}},
+		{SessionNote: store.SessionNote{ID: 2, Title: "b"}},
+	}
+
+	cmd := s.onAnswer(notesSearchAnswerMsg{
+		reqID:    1,
+		question: "whir",
+		answer:   "You wrote about whir.",
+	})
+	if cmd != nil {
+		t.Fatal("onAnswer should not refocus chat while browsing results")
+	}
+	if s.focus != searchFocusResults {
+		t.Fatalf("expected results focus preserved, got %d", s.focus)
+	}
+	if s.chatInput.IsFocused() {
+		t.Fatal("chat should stay blurred while browsing results")
+	}
+
+	s.handleMsg(keyPress("down"), nil, nil, nil)
+	if s.resultCursor != 1 {
+		t.Fatalf("expected cursor 1 after down, got %d", s.resultCursor)
 	}
 }
 

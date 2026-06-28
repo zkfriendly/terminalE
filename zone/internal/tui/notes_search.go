@@ -217,6 +217,9 @@ func (s *notesSearchState) onAnswer(msg notesSearchAnswerMsg) tea.Cmd {
 	if !s.active {
 		return nil
 	}
+	if s.focus != searchFocusChat {
+		return nil
+	}
 	s.focus = searchFocusChat
 	return s.chatInput.focusCmd()
 }
@@ -283,7 +286,7 @@ func (s *notesSearchState) handleQueryMsg(msg tea.Msg, st *store.Store, cfg *con
 		}
 	case panelInputTab:
 		if len(s.results) > 0 {
-			s.focus = searchFocusResults
+			s.blurToResults()
 		} else {
 			s.focus = searchFocusChat
 			return tea.Batch(cmd, s.chatInput.focusCmd())
@@ -303,7 +306,7 @@ func (s *notesSearchState) handleChatMsg(msg tea.Msg, st *store.Store, cfg *conf
 		}
 	case panelInputTab:
 		if len(s.results) > 0 {
-			s.focus = searchFocusResults
+			s.blurToResults()
 		} else {
 			s.focus = searchFocusQuery
 			return tea.Batch(cmd, s.queryInput.focusCmd())
