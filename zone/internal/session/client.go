@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -25,11 +24,7 @@ type Client struct {
 
 // Dial connects to a running daemon. It fails if no daemon is listening.
 func Dial() (*Client, error) {
-	sock, err := SocketPath()
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.DialTimeout("unix", sock, time.Second)
+	conn, err := dialDaemon(time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -42,11 +37,7 @@ func Dial() (*Client, error) {
 
 // IsAlive reports whether a daemon is currently listening.
 func IsAlive() bool {
-	sock, err := SocketPath()
-	if err != nil {
-		return false
-	}
-	conn, err := net.DialTimeout("unix", sock, 500*time.Millisecond)
+	conn, err := dialDaemon(500 * time.Millisecond)
 	if err != nil {
 		return false
 	}
@@ -166,8 +157,8 @@ func spawnDaemon(sessionID int64) error {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 	}
-	// Detach into its own session so it survives the terminal closing.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Detach into its own session/process group so it survives the terminal closing.
+	setDetached(cmd)
 
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {

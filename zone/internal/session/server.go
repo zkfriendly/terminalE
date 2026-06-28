@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"net"
-	"os"
 	"sync"
 	"time"
 
@@ -49,17 +48,11 @@ type server struct {
 // RunDaemon is the entry point for the background process (`zone __daemon <id>`).
 // It blocks until the session ends or completes.
 func RunDaemon(sessionID int64) error {
-	sockPath, err := SocketPath()
-	if err != nil {
-		return err
-	}
-
-	// If a live daemon already owns the socket, do nothing.
-	if c, err := net.Dial("unix", sockPath); err == nil {
+	// If a live daemon already owns the endpoint, do nothing.
+	if c, err := dialDaemon(500 * time.Millisecond); err == nil {
 		c.Close()
 		return nil
 	}
-	_ = os.Remove(sockPath) // clear any stale socket
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -105,7 +98,7 @@ func RunDaemon(sessionID int64) error {
 		engine.Start()
 	}
 
-	ln, err := net.Listen("unix", sockPath)
+	ln, err := listenDaemon()
 	if err != nil {
 		return err
 	}
@@ -133,7 +126,7 @@ func RunDaemon(sessionID int64) error {
 	go s.tickLoop()
 
 	<-s.done
-	s.cleanup(sockPath)
+	s.cleanup()
 	return nil
 }
 
@@ -394,9 +387,9 @@ func (s *server) signalDone() {
 	s.once.Do(func() { close(s.done) })
 }
 
-func (s *server) cleanup(sockPath string) {
+func (s *server) cleanup() {
 	s.ln.Close()
-	_ = os.Remove(sockPath)
+	removeEndpoint()
 
 	// Remember the user's last sound selection and volume.
 	s.cfg.Layers = s.audio.Selection()
