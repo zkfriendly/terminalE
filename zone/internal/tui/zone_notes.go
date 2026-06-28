@@ -22,6 +22,7 @@ func (z *zoneView) openNotes() {
 	h := z.noteEditorHeight()
 	z.noteEditor = newVimNoteEditor(w, h)
 	z.noting = true
+	z.noteNav = newNotesNav(notesScreenList)
 	z.openNotePicker()
 }
 
@@ -248,6 +249,7 @@ func (z *zoneView) actionablesNoteBody() string {
 
 func (z *zoneView) openActionablesPanel(note store.GlobalNote) tea.Cmd {
 	z.viewingActionables = true
+	z.noteNav.push(notesScreenActionables)
 	z.actionablesNoteID = note.ID
 	z.actionablesTitle = noteActionablesTitle(note.SessionNote)
 	z.actionablesItems = nil
@@ -276,6 +278,9 @@ func (z *zoneView) reextractActionables() tea.Cmd {
 
 func (z *zoneView) closeActionablesPanel() {
 	z.viewingActionables = false
+	if z.noteNav.peek() == notesScreenActionables {
+		z.noteNav.pop()
+	}
 	z.actionablesNoteID = 0
 	z.actionablesTitle = ""
 	z.actionablesItems = nil
@@ -343,18 +348,49 @@ func (z *zoneView) noteIsDirty() bool {
 }
 
 func (z *zoneView) tryBrowseNotes() tea.Cmd {
+	return z.leaveNoteEditor()
+}
+
+func (z *zoneView) leaveNoteEditor() tea.Cmd {
 	if z.noteIsDirty() {
 		return nil
 	}
 	z.revertNoteEditor()
-	z.openNotePicker()
-	return tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
+	if !z.noteNav.canPop() {
+		z.openNotePicker()
+		return tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
+	}
+	z.noteNav.pop()
+	switch z.noteNav.peek() {
+	case notesScreenSearch:
+		z.notePicking = false
+		return z.noteSearch.resume()
+	case notesScreenList:
+		z.noteEditor.Reset()
+		z.openNotePicker()
+		return tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
+	default:
+		return nil
+	}
+}
+
+func (z *zoneView) openNoteSearch() tea.Cmd {
+	z.noteNav.push(notesScreenSearch)
+	z.noteSearch.onDismiss = z.dismissNoteSearch
+	return z.noteSearch.open()
+}
+
+func (z *zoneView) dismissNoteSearch() {
+	if z.noteNav.peek() == notesScreenSearch {
+		z.noteNav.pop()
+	}
 }
 
 func (z *zoneView) newNote() {
 	z.editingNoteID = 0
 	z.noteEditor.Reset()
 	z.noteEditor.Resize(z.noteEditorWidth(), z.noteEditorHeight())
+	z.noteNav.push(notesScreenEdit)
 	z.notePicking = false
 }
 
@@ -362,10 +398,14 @@ func (z *zoneView) loadNote(n store.SessionNote) {
 	z.editingNoteID = n.ID
 	z.noteEditor.Load(n.Body)
 	z.noteEditor.Resize(z.noteEditorWidth(), z.noteEditorHeight())
+	z.noteNav.push(notesScreenEdit)
 	z.notePicking = false
 }
 
 func (z *zoneView) openNotePicker() {
+	if z.noteNav.peek() == notesScreenEdit {
+		z.noteNav.pop()
+	}
 	if z.editingNoteID != 0 {
 		z.notePickIdx = notePickIdxForNote(z.noteRows, z.editingNoteID)
 	} else {
@@ -387,6 +427,9 @@ func (z *zoneView) closeNotes(save bool) {
 	z.editingNoteID = 0
 	z.confirmingNoteDelete = false
 	z.closeActionablesPanel()
+	z.noteSearch.onDismiss = nil
+	z.noteSearch.close()
+	z.noteNav.reset(notesScreenList)
 	if z.cfg != nil {
 		z.cfg.ResumeNotesSessionID = 0
 		_ = z.cfg.Save()
@@ -414,12 +457,24 @@ func (z *zoneView) deleteSelectedNote() {
 }
 
 func (z *zoneView) handleNotesInput(msg tea.Msg) tea.Cmd {
+	if z.noteSearch.active {
+		switch msg.(type) {
+		case tea.KeyPressMsg, tea.PasteMsg:
+			return z.noteSearch.handleMsg(msg, z.store, z.cfg, z.openNoteFromSearch)
+		}
+	}
+	if z.noteNav.peek() == notesScreenActionables {
+		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+			return z.handleActionablesPanelKey(keyMsg.String())
+		}
+		return nil
+	}
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		if z.notePicking {
-			return z.handleNotePickerKey(keyMsg.String())
+			return z.handleNotePickerKey(keyMsg)
 		}
 		if keyMsg.String() == "esc" && z.noteEditor.mode == noteModeNormal {
-			return z.tryBrowseNotes()
+			return z.leaveNoteEditor()
 		}
 	} else if _, ok := msg.(tea.PasteMsg); !ok {
 		return nil
@@ -438,6 +493,9 @@ func (z *zoneView) handleNotesInput(msg tea.Msg) tea.Cmd {
 		saveCmd = z.saveNoteDraft()
 		z.noteEditor.Blur()
 		z.noteEditor.Reset()
+		if z.noteNav.canPop() && z.noteNav.peek() == notesScreenEdit {
+			z.noteNav.pop()
+		}
 		z.openNotePicker()
 		pendingCmd := tea.Batch(z.enrichPendingCmd(), z.scanPendingActionablesCmd())
 		if saveCmd != nil {
@@ -447,7 +505,7 @@ func (z *zoneView) handleNotesInput(msg tea.Msg) tea.Cmd {
 	case noteActQuit:
 		z.closeNotes(false)
 	case noteActBrowse:
-		saveCmd = z.tryBrowseNotes()
+		saveCmd = z.leaveNoteEditor()
 	case noteActNew:
 		z.newNote()
 	}
@@ -457,7 +515,12 @@ func (z *zoneView) handleNotesInput(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (z *zoneView) handleNotePickerKey(key string) tea.Cmd {
+func (z *zoneView) openNoteFromSearch(n store.GlobalNote) {
+	z.loadNote(n.SessionNote)
+}
+
+func (z *zoneView) handleNotePickerKey(msg tea.KeyPressMsg) tea.Cmd {
+	key := msg.String()
 	if z.viewingActionables {
 		return z.handleActionablesPanelKey(key)
 	}
@@ -499,18 +562,28 @@ func (z *zoneView) handleNotePickerKey(key string) tea.Cmd {
 		if note, ok := noteBrowseNoteAt(z.noteRows, z.notePickIdx); ok && note.HasActionables {
 			return z.openActionablesPanel(note)
 		}
+	default:
+		if isSearchKey(msg) {
+			return z.openNoteSearch()
+		}
 	}
 	return nil
 }
 
 func (z *zoneView) renderNotes(width, height int) string {
 	z.noteEditor.Resize(z.noteEditorWidth(), z.noteEditorHeight())
-	if z.viewingActionables {
+	if z.noteNav.peek() == notesScreenActionables {
 		return renderNoteActionablesPanel(
 			z.actionablesTitle, z.actionablesItems,
 			z.extractingActionables, z.actionablesExtractErr,
 			width, height, z.styles,
 		)
+	}
+	if z.noteNav.peek() == notesScreenEdit {
+		return z.renderNoteEditor(width, height)
+	}
+	if z.noteSearch.active {
+		return z.noteSearch.render(width, height, z.styles)
 	}
 	if z.notePicking {
 		z.ensureNotePickVisible()
@@ -521,6 +594,9 @@ func (z *zoneView) renderNotes(width, height int) string {
 
 func (z *zoneView) noteActionHints() []string {
 	s := z.styles
+	if z.noteSearch.active {
+		return searchActionHints(s, z.noteSearch.focus, len(z.noteSearch.results) > 0)
+	}
 	if z.viewingActionables {
 		return noteActionablesActionHints(s)
 	}
@@ -544,6 +620,8 @@ func (z *zoneView) noteActionHints() []string {
 	}
 	hints := []string{
 		s.helpEntry("y/p · ⌃c/v", "copy/paste"),
+		s.helpEntry("/? · ⌃f", "find in note"),
+		s.helpEntry("n/N", "next/prev match"),
 		s.helpEntry("u/:redo", "undo/redo"),
 		s.helpEntry("v/V", "select"),
 		s.helpEntry(":w", "save"),
@@ -559,6 +637,8 @@ func (z *zoneView) noteActionHints() []string {
 func (z *zoneView) notePickerActionHints() []string {
 	s := z.styles
 	hints := []string{
+		s.helpEntry("/", "search"),
+		s.helpEntry("ctrl+f", "search"),
 		s.helpEntry("↑↓", "move"),
 		s.helpEntry("enter", "open"),
 		s.helpEntry("n", "new"),
@@ -575,6 +655,9 @@ func (z *zoneView) noteInfoHints() []string {
 	s := z.styles
 	if !z.noting {
 		return nil
+	}
+	if z.noteSearch.active {
+		return searchInfoHints(s, z.cfg, z.noteSearch.query, len(z.noteSearch.results), z.noteSearch.loading, z.noteSearch.resultsPrelim)
 	}
 	if z.notePicking {
 		listH := z.notePickerListHeight()
@@ -666,7 +749,8 @@ func (z *zoneView) renderNotePicker(width, height int) string {
 	total := z.notePickerTotalRows()
 
 	var lines []string
-	lines = append(lines, s.PaneTitle.Render("Open note"), "")
+	lines = append(lines, s.PaneTitle.Render("Open note")+"  "+s.Dim.Render("/ or ctrl+f — search"))
+	lines = append(lines, "")
 
 	for row := z.notePickOffset; row < z.notePickOffset+listH && row < total; row++ {
 		lines = append(lines, z.renderNotePickerRow(row, innerW, s))

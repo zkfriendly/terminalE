@@ -17,6 +17,7 @@ const (
 	noteModeNormal
 	noteModeVisual
 	noteModeCommand
+	noteModeSearch
 )
 
 // noteAction tells the caller what to do after a keypress.
@@ -51,6 +52,9 @@ type vimNoteEditor struct {
 	insertSaved bool
 	yankBuf     string
 	lastFind    *findMotion
+	searchLine  string
+	searchBack  bool
+	lastSearch  noteSearchState
 }
 
 func newVimNoteEditor(width, height int) vimNoteEditor {
@@ -106,6 +110,9 @@ func (e *vimNoteEditor) Resize(width, height int) {
 
 // editorInfoHint returns a status line when the note overflows the viewport.
 func (e *vimNoteEditor) editorInfoHint(s Styles) string {
+	if hint := e.searchInfoHint(); hint != "" {
+		return s.Dim.Render(hint)
+	}
 	viewH := e.ta.Height()
 	if viewH <= 0 {
 		return ""
@@ -181,6 +188,8 @@ func (e *vimNoteEditor) ModeLabel() string {
 		return "-- VISUAL --"
 	case noteModeCommand:
 		return ":" + e.cmdLine
+	case noteModeSearch:
+		return e.searchLabel()
 	default:
 		return "-- NORMAL --"
 	}
@@ -225,9 +234,15 @@ func (e *vimNoteEditor) handleKey(msg tea.KeyPressMsg) (tea.Cmd, noteAction) {
 		case "ctrl+c", "cmd+c":
 			e.noteCopy()
 			return nil, noteActNone
+		case "ctrl+f":
+			e.beginSearch(false)
+			return nil, noteActNone
 		default:
 			return e.noteInsertKey(msg)
 		}
+
+	case noteModeSearch:
+		return e.handleSearchKey(msg)
 
 	case noteModeCommand:
 		switch k {
@@ -408,6 +423,23 @@ func (e *vimNoteEditor) handleNormalKey(k string) (tea.Cmd, noteAction) {
 		return nil, noteActNone
 	case "ctrl+c", "cmd+c":
 		e.noteCopy()
+		return nil, noteActNone
+	case "ctrl+f":
+		e.beginSearch(false)
+		return nil, noteActNone
+	case "/":
+		e.beginSearch(false)
+		return nil, noteActNone
+	case "?":
+		e.beginSearch(true)
+		return nil, noteActNone
+	case "n":
+		e.clearPending()
+		e.searchNext(false)
+		return nil, noteActNone
+	case "N":
+		e.clearPending()
+		e.searchNext(true)
 		return nil, noteActNone
 	case "r":
 		e.pending = "r"

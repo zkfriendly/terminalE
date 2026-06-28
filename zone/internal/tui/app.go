@@ -184,6 +184,18 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.allNotes.onNoteActionablesExtracted(msg)
 		}
 		return m, nil
+
+	case notesSearchAnswerMsg:
+		var cmd tea.Cmd
+		if m.allNotes != nil {
+			cmd = m.allNotes.onNotesSearchAnswer(msg)
+		}
+		if m.zone != nil {
+			if c := m.zone.noteSearch.onAnswer(msg); cmd == nil {
+				cmd = c
+			}
+		}
+		return m, cmd
 	}
 
 	return m, m.updateActive(msg)

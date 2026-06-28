@@ -305,7 +305,7 @@ func TestSettingsEnterViaKeyStartsEdit(t *testing.T) {
 	if cmd != nil {
 		app.Update(cmd())
 	}
-	if !app.settings.editing {
+	if !app.settings.prompt.IsFocused() {
 		t.Fatal("enter on Work (min) should start editing")
 	}
 }
@@ -371,7 +371,7 @@ func TestSettingsEnterWorksWithNavFocus(t *testing.T) {
 	if cmd != nil {
 		app.Update(cmd())
 	}
-	if !app.settings.editing {
+	if !app.settings.prompt.IsFocused() {
 		t.Fatal("enter should edit settings field even when nav bar had focus")
 	}
 }
@@ -393,7 +393,7 @@ func TestSettingsView(t *testing.T) {
 
 	app.settings.cursor = 1 // Work (min)
 	app.settings.startInput()
-	app.settings.input.SetValue("45")
+	app.settings.prompt.SetValue("45")
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		app.Update(cmd())
@@ -424,10 +424,111 @@ func TestAllNotesRenders(t *testing.T) {
 		t.Fatal("expected notes page in shell")
 	}
 	out := app.View().Content
-	for _, want := range []string{"Notes", "Open note", "unlabeled", "Deep work"} {
+	for _, want := range []string{"Notes", "Open note", "unlabeled", "Deep work", "search"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("notes render missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestNotesSearchOpens(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Deep work")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	st.AddSessionNote(sess.ID, "remember the refactor")
+
+	sizeApp(app)
+	app.Update(gotoNotesMsg{})
+	app.shell.focusNav = true
+	app.Update(keyPress("/"))
+	if !app.allNotes.search.active {
+		t.Fatal("expected search overlay after / with page switcher open")
+	}
+	out := app.View().Content
+	if !strings.Contains(out, "Search notes") {
+		t.Fatalf("expected search panel:\n%s", out)
+	}
+}
+
+func TestNotesSearchChatInputTyping(t *testing.T) {
+	var s notesSearchState
+	s.open()
+	s.focus = searchFocusChat
+	s.chatInput.markFocused()
+
+	s.handleMsg(keyPress("j"), nil, nil, nil)
+	if s.resultCursor != 0 {
+		t.Fatalf("expected cursor unchanged while typing, got %d", s.resultCursor)
+	}
+	if s.focus != searchFocusChat {
+		t.Fatalf("expected chat focus while typing, got %d", s.focus)
+	}
+}
+
+func TestNotesSearchOpenResult(t *testing.T) {
+	app, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Deep work")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	n1, _ := st.AddSessionNote(sess.ID, "whir protocol notes")
+	st.AddSessionNote(sess.ID, "other stuff")
+
+	sizeApp(app)
+	app.Update(gotoNotesMsg{})
+
+	app.allNotes.search.active = false
+	app.allNotes.search.query = "whir"
+	app.allNotes.search.results, _ = st.SearchNotes("whir", 50)
+	app.allNotes.search.resultCursor = 0
+	app.allNotes.nav = newNotesNav(notesScreenList)
+	app.allNotes.nav.push(notesScreenSearch)
+
+	app.allNotes.openNoteFromSearch(app.allNotes.search.results[0])
+	if app.allNotes.nav.peek() != notesScreenEdit {
+		t.Fatalf("expected edit screen, got %d", app.allNotes.nav.peek())
+	}
+	if app.allNotes.search.active {
+		t.Fatal("expected search suspended while editing")
+	}
+
+	app.allNotes.revertEditor()
+	app.allNotes.nav.pop()
+	if app.allNotes.nav.peek() != notesScreenSearch {
+		t.Fatalf("expected search screen after back, got %d", app.allNotes.nav.peek())
+	}
+	app.allNotes.search.active = true
+	if app.allNotes.editingNoteID != n1.ID {
+		t.Fatalf("expected note %d opened, got %d", n1.ID, app.allNotes.editingNoteID)
+	}
+}
+
+func TestZoneNotesSearchOpens(t *testing.T) {
+	_, st := newTestApp(t)
+	p, _ := st.CreateProject("Demo", "")
+	task, _ := st.CreateTask(p.ID, "Focus")
+	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
+	st.AddSessionNote(sess.ID, "whir protocol notes")
+
+	z := newZone(st, nil, newStyles(), testCfgPtr(), session.Snapshot{SessionID: sess.ID, Phase: "work"})
+	z.width, z.height = 100, 40
+	z.openNotes()
+	if !z.notePicking {
+		t.Fatal("expected note picker")
+	}
+
+	z.handleNotePickerKey(keyPress("/"))
+	if !z.noteSearch.active {
+		t.Fatal("expected search overlay after / in zone note picker")
+	}
+	out := z.renderNotes(100, 40)
+	if !strings.Contains(out, "Search notes") {
+		t.Fatalf("expected search panel:\n%s", out)
+	}
+	hints := z.notePickerActionHints()
+	joined := strings.Join(hints, " ")
+	if !strings.Contains(joined, "search") {
+		t.Fatalf("expected search in picker hints, got %q", joined)
 	}
 }
 
@@ -604,7 +705,7 @@ func TestNotePickerAndEdit(t *testing.T) {
 	}
 
 	z.notePickIdx = 3 // row 0 = new, row 1 = session divider, row 2 = newest, row 3 = "first note"
-	z.handleNotePickerKey("enter")
+	z.handleNotePickerKey(keyPress("enter"))
 	if z.editingNoteID != n1.ID {
 		t.Fatalf("expected to load first note id %d, got %d", n1.ID, z.editingNoteID)
 	}
@@ -643,7 +744,7 @@ func TestNoteDeleteConfirmation(t *testing.T) {
 	z.openNotes()
 	z.notePickIdx = 2 // row 0 = new, row 1 = session divider, row 2 = newest ("delete me")
 
-	z.handleNotePickerKey("d")
+	z.handleNotePickerKey(keyPress("d"))
 	if !z.confirmingNoteDelete {
 		t.Fatal("expected delete confirmation")
 	}
@@ -652,7 +753,7 @@ func TestNoteDeleteConfirmation(t *testing.T) {
 		t.Fatalf("expected delete prompt in chrome, got:\n%s", out)
 	}
 
-	z.handleNotePickerKey("n")
+	z.handleNotePickerKey(keyPress("n"))
 	if z.confirmingNoteDelete {
 		t.Fatal("n should cancel delete confirmation")
 	}
@@ -661,8 +762,8 @@ func TestNoteDeleteConfirmation(t *testing.T) {
 		t.Fatalf("cancel should leave notes intact, got %d", len(notes))
 	}
 
-	z.handleNotePickerKey("d")
-	z.handleNotePickerKey("y")
+	z.handleNotePickerKey(keyPress("d"))
+	z.handleNotePickerKey(keyPress("y"))
 	if z.confirmingNoteDelete {
 		t.Fatal("y should clear confirmation")
 	}

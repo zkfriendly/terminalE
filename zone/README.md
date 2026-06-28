@@ -102,7 +102,8 @@ Use `b` during a focus session to background without quitting. Press `E` to end
 a session early (with confirmation); the dashboard will offer to resume it later.
 
 **Session notes:** press `n` during a focus session to open the note browser.
-Pick an earlier note to edit or choose **+ new note**. When you save a note,
+Press **`/`** or **`ctrl+f`** there (or on the **Notes** tab) to search all notes with an
+LLM summary and follow-up chat. Pick an earlier note to edit or choose **+ new note**. When you save a note,
 zone asks a local **[LM Studio](https://lmstudio.ai/)** server (OpenAI-compatible
 API) for a short **title** and **emoji** label. If labeling fails, zone shows the
 error and leaves the note **unlabeled** (empty title/emoji) so you can tell which
@@ -120,6 +121,32 @@ it, or start fresh with `f` / `enter`.
 ### Stats & History
 
 Browse from the top nav. Press `r` to refresh. `esc` returns to Work.
+
+### Notes
+
+Browse every session note from the top nav (**4:Notes**). Press **`/`** or **`ctrl+f`** to **search** your notes:
+type a natural-language question (e.g. `what about whir do I know`). Search is **LLM-assisted**:
+the local model expands your question into keywords and a hypothetical matching note (HyDE),
+merges keyword hits with reciprocal rank fusion, then **reranks** candidates by relevance before
+summarizing. Requires Local LLM enabled in Config (same server used for note labels). **`↑`/`↓`** selects a matching note (from the chat pane when the follow-up
+box is empty, or from the results pane after **`tab`**). Press **`enter`** or **`o`**
+to open the highlighted note for editing.
+
+While editing a note, search **inside** that note with vim-style **`/`** / **`?`**
+or **`ctrl+f`**, then **`n`** / **`N`** for next/previous match.
+
+| Key | Action |
+| --- | ------ |
+| `↑`/`↓`, `j/k` | Move in the note list |
+| `enter` | Open selected note |
+| `/` or `ctrl+f` | Search notes (LLM summary + chat) |
+| `↑`/`↓` or `tab` | Select a search result |
+| `enter` or `o` | Open highlighted search result |
+| `/` or `?` or `ctrl+f` | Find text inside an open note (normal mode) |
+| `n` / `N` | Next / previous in-note match |
+| `t` | View extracted tasks (when available) |
+| `d` | Delete note |
+| `r` | Refresh |
 
 Each session shows both **focus** time (active work, excluding pauses and
 breaks) and **wall** time (total clock time from start to end). Useful when you

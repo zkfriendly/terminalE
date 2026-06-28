@@ -336,3 +336,45 @@ func TestDeleteLineCursorNarrowWidth(t *testing.T) {
 		t.Fatalf("dd should clamp column to new line length, got col %d", e.ta.Column())
 	}
 }
+
+func TestVimNoteEditorInNoteSearch(t *testing.T) {
+	e := newVimNoteEditor(40, 6)
+	e.Load("alpha whir beta\nsecond whir line")
+	e.mode = noteModeNormal
+
+	e.Update(keyPress("/"))
+	if e.mode != noteModeSearch {
+		t.Fatalf("expected search mode, got %d", e.mode)
+	}
+	e.Update(keyPress("w"))
+	e.Update(keyPress("h"))
+	e.Update(keyPress("i"))
+	e.Update(keyPress("r"))
+	e.Update(keyPress("enter"))
+	if e.lastSearch.pattern != "whir" {
+		t.Fatalf("expected pattern whir, got %q", e.lastSearch.pattern)
+	}
+	if len(e.lastSearch.matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(e.lastSearch.matches))
+	}
+	if e.ta.Line() != 0 || e.ta.Column() != 6 {
+		t.Fatalf("expected first match at 0:6, got %d:%d", e.ta.Line(), e.ta.Column())
+	}
+
+	e.Update(keyPress("n"))
+	if e.ta.Line() != 1 || e.ta.Column() != 7 {
+		t.Fatalf("expected second match at 1:7, got %d:%d", e.ta.Line(), e.ta.Column())
+	}
+
+	e.Update(keyPress("N"))
+	if e.ta.Line() != 0 || e.ta.Column() != 6 {
+		t.Fatalf("expected back to first match, got %d:%d", e.ta.Line(), e.ta.Column())
+	}
+}
+
+func TestFindNoteMatches(t *testing.T) {
+	matches := findNoteMatches("Hello HELLO", "hello")
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 case-insensitive matches, got %d", len(matches))
+	}
+}

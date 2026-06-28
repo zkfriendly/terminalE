@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/zkfriendly/zone/internal/store"
@@ -39,7 +38,7 @@ type dashboard struct {
 	selTask int
 	pane    int
 	mode    int
-	input   textinput.Model
+	prompt  panelInput
 
 	// Standalone (non-pomodoro) tracking.
 	tracking     bool
@@ -62,13 +61,10 @@ type dashboard struct {
 }
 
 func newDashboard(st *store.Store, s Styles) *dashboard {
-	ti := textinput.New()
-	ti.Prompt = "  "
-	ti.CharLimit = 80
 	d := &dashboard{
 		store:    st,
 		styles:   s,
-		input:    ti,
+		prompt:   newPanelInput("  ", "", 80),
 		workSecs: map[int64]int{},
 		now:      time.Now(),
 	}
@@ -162,12 +158,12 @@ func (d *dashboard) update(msg tea.Msg) tea.Cmd {
 		d.now = time.Time(msg)
 		return nil
 	case tea.KeyPressMsg:
-		if d.mode != modeNormal {
+		if d.prompt.IsFocused() {
 			return d.updateInput(msg)
 		}
 		return d.updateNormal(msg)
 	case tea.PasteMsg:
-		if d.mode != modeNormal {
+		if d.prompt.IsFocused() {
 			return d.updateInput(msg)
 		}
 	}
@@ -175,27 +171,22 @@ func (d *dashboard) update(msg tea.Msg) tea.Cmd {
 }
 
 func (d *dashboard) updateInput(msg tea.Msg) tea.Cmd {
-	if key, ok := msg.(tea.KeyPressMsg); ok {
-		switch key.String() {
-	case "esc":
+	cmd, act := d.prompt.handleMsg(msg)
+	switch act {
+	case panelInputCancel:
 		d.mode = modeNormal
-		d.input.Blur()
-		d.input.Reset()
-		return nil
-	case "enter":
-		val := strings.TrimSpace(d.input.Value())
+		d.prompt.Reset()
+		return cmd
+	case panelInputSubmit:
+		val := strings.TrimSpace(d.prompt.Value())
 		mode := d.mode
 		d.mode = modeNormal
-		d.input.Blur()
-		d.input.Reset()
+		d.prompt.Reset()
 		if val == "" {
-			return nil
+			return cmd
 		}
-		return d.commit(mode, val)
-		}
+		return tea.Batch(cmd, d.commit(mode, val))
 	}
-	var cmd tea.Cmd
-	d.input, cmd = d.input.Update(msg)
 	return cmd
 }
 
@@ -232,9 +223,9 @@ func (d *dashboard) commit(mode int, val string) tea.Cmd {
 
 func (d *dashboard) startInput(mode int, placeholder, initial string) tea.Cmd {
 	d.mode = mode
-	d.input.Placeholder = placeholder
-	d.input.SetValue(initial)
-	return d.input.Focus()
+	d.prompt.SetPlaceholder(placeholder)
+	d.prompt.SetValue(initial)
+	return d.prompt.focusCmd()
 }
 
 func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
@@ -406,7 +397,7 @@ func (d *dashboard) renderBody(width, height int) string {
 }
 
 func (d *dashboard) actionHints() []string {
-	if d.mode != modeNormal {
+	if d.prompt.IsFocused() {
 		return []string{
 			d.styles.helpEntry("enter", "save"),
 			d.styles.helpEntry("esc", "cancel"),
@@ -489,7 +480,7 @@ func (d *dashboard) renderProjects(w, h int) string {
 		lines = append(lines, dot+" "+label)
 	}
 	if d.mode == modeNewProject || d.mode == modeRenameProject {
-		lines = append(lines, "", d.input.View())
+		lines = append(lines, "", d.prompt.View())
 	}
 	content := title + "\n" + strings.Join(lines, "\n")
 	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1, 0, 0).Render(content)
@@ -513,7 +504,7 @@ func (d *dashboard) renderTasks(w, h int) string {
 		lines = append(lines, d.renderTaskLine(i, t, w))
 	}
 	if d.mode == modeNewTask || d.mode == modeRenameTask {
-		lines = append(lines, "", d.input.View())
+		lines = append(lines, "", d.prompt.View())
 	}
 	content := title + "\n" + strings.Join(lines, "\n")
 	return lipgloss.NewStyle().Width(w).Height(h).Padding(0, 1).Render(content)
@@ -560,7 +551,7 @@ func (d *dashboard) renderTaskLine(i int, t store.Task, w int) string {
 }
 
 func (d *dashboard) escIsLocal() bool {
-	return d.mode != modeNormal
+	return d.prompt.IsFocused()
 }
 
 func clampInt(v, lo, hi int) int {

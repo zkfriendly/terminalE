@@ -36,6 +36,9 @@ type allNotesView struct {
 	actionablesItems      []string
 	extractingActionables bool
 	actionablesExtractErr string
+
+	search notesSearchState
+	nav   notesNavStack
 }
 
 func newAllNotes(st *store.Store, cfg *config.Config, s Styles) *allNotesView {
@@ -47,6 +50,7 @@ func newAllNotes(st *store.Store, cfg *config.Config, s Styles) *allNotesView {
 		enrichingNotes:      map[int64]bool{},
 		scanningActionables: map[int64]bool{},
 	}
+	v.nav = newNotesNav(notesScreenList)
 	v.editor = newVimNoteEditor(80, 20)
 	v.reload()
 	return v
@@ -75,14 +79,20 @@ func (v *allNotesView) reload() {
 func (v *allNotesView) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		if v.search.active {
+			return v.search.handleMsg(msg, v.store, v.cfg, v.openNoteFromSearch)
+		}
 		if v.viewingActionables {
 			return v.handleActionablesKey(msg.String())
 		}
 		if v.picking {
-			return v.handleBrowseKey(msg.String())
+			return v.handleBrowseKey(msg)
 		}
 		return v.handleEditorInput(msg)
 	case tea.PasteMsg:
+		if v.search.active {
+			return v.search.handleMsg(msg, v.store, v.cfg, v.openNoteFromSearch)
+		}
 		if !v.picking && !v.viewingActionables {
 			return v.handleEditorInput(msg)
 		}
@@ -90,7 +100,8 @@ func (v *allNotesView) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (v *allNotesView) handleBrowseKey(key string) tea.Cmd {
+func (v *allNotesView) handleBrowseKey(msg tea.KeyPressMsg) tea.Cmd {
+	key := msg.String()
 	if v.confirmingNoteDelete {
 		switch key {
 		case "y", "enter":
@@ -132,16 +143,74 @@ func (v *allNotesView) handleBrowseKey(key string) tea.Cmd {
 	case "r":
 		v.reload()
 		return v.pendingScanCmd()
+	default:
+		if isSearchKey(msg) {
+			return v.openSearch()
+		}
 	}
 	v.clampCursor()
 	v.ensureCursorVisible()
 	return nil
 }
 
+func (v *allNotesView) openSearch() tea.Cmd {
+	v.nav.push(notesScreenSearch)
+	v.search.onDismiss = v.dismissSearch
+	return v.search.open()
+}
+
+func (v *allNotesView) dismissSearch() {
+	if v.nav.peek() == notesScreenSearch {
+		v.nav.pop()
+	}
+}
+
+func (v *allNotesView) openNoteFromSearch(n store.GlobalNote) {
+	v.editingNoteID = n.ID
+	v.editor.Load(n.Body)
+	v.editor.Resize(v.editorWidth(), v.editorHeight())
+	v.nav.push(notesScreenEdit)
+	v.picking = false
+}
+
+func (v *allNotesView) pushEditFromBrowse(n store.GlobalNote) {
+	v.editingNoteID = n.ID
+	v.editor.Load(n.Body)
+	v.editor.Resize(v.editorWidth(), v.editorHeight())
+	v.nav.push(notesScreenEdit)
+	v.picking = false
+}
+
+func (v *allNotesView) leaveEditor() tea.Cmd {
+	if v.noteIsDirty() {
+		return nil
+	}
+	v.revertEditor()
+	if !v.nav.canPop() {
+		v.openBrowse()
+		return tea.Batch(v.enrichPendingCmd(), v.pendingScanCmd())
+	}
+	v.nav.pop()
+	switch v.nav.peek() {
+	case notesScreenSearch:
+		return v.search.resume()
+	case notesScreenList:
+		v.editor.Reset()
+		v.openBrowse()
+		return tea.Batch(v.enrichPendingCmd(), v.pendingScanCmd())
+	default:
+		return nil
+	}
+}
+
+func (v *allNotesView) onNotesSearchAnswer(msg notesSearchAnswerMsg) tea.Cmd {
+	return v.search.onAnswer(msg)
+}
+
 func (v *allNotesView) handleEditorInput(msg tea.Msg) tea.Cmd {
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		if keyMsg.String() == "esc" && v.editor.mode == noteModeNormal {
-			return v.tryBrowse()
+			return v.leaveEditor()
 		}
 	}
 
@@ -157,6 +226,10 @@ func (v *allNotesView) handleEditorInput(msg tea.Msg) tea.Cmd {
 	case noteActSaveQuit:
 		saveCmd = v.saveDraft()
 		v.editor.Blur()
+		v.editor.Reset()
+		if v.nav.canPop() && v.nav.peek() == notesScreenEdit {
+			v.nav.pop()
+		}
 		v.openBrowse()
 		pendingCmd := tea.Batch(v.enrichPendingCmd(), v.pendingScanCmd())
 		if saveCmd != nil {
@@ -164,9 +237,12 @@ func (v *allNotesView) handleEditorInput(msg tea.Msg) tea.Cmd {
 		}
 		return tea.Batch(cmd, pendingCmd)
 	case noteActBrowse:
-		saveCmd = v.tryBrowse()
+		saveCmd = v.leaveEditor()
 	case noteActQuit:
 		v.revertEditor()
+		if v.nav.canPop() {
+			return v.leaveEditor()
+		}
 		v.openBrowse()
 	}
 	if saveCmd != nil {
@@ -176,6 +252,9 @@ func (v *allNotesView) handleEditorInput(msg tea.Msg) tea.Cmd {
 }
 
 func (v *allNotesView) openBrowse() {
+	if v.nav.peek() == notesScreenEdit {
+		v.nav.pop()
+	}
 	v.picking = true
 	v.syncCursorToEditingNote()
 	v.offset = 0
@@ -187,10 +266,7 @@ func (v *allNotesView) openSelectedNote() {
 	if !ok {
 		return
 	}
-	v.editingNoteID = n.ID
-	v.editor.Load(n.Body)
-	v.editor.Resize(v.editorWidth(), v.editorHeight())
-	v.picking = false
+	v.pushEditFromBrowse(n)
 }
 
 func (v *allNotesView) syncCursorToEditingNote() {
@@ -206,12 +282,7 @@ func (v *allNotesView) syncCursorToEditingNote() {
 }
 
 func (v *allNotesView) tryBrowse() tea.Cmd {
-	if v.noteIsDirty() {
-		return nil
-	}
-	v.revertEditor()
-	v.openBrowse()
-	return tea.Batch(v.enrichPendingCmd(), v.pendingScanCmd())
+	return v.leaveEditor()
 }
 
 func (v *allNotesView) saveDraft() tea.Cmd {
@@ -366,6 +437,7 @@ func (v *allNotesView) actionablesNoteBody() string {
 
 func (v *allNotesView) openActionablesPanel(note store.GlobalNote) tea.Cmd {
 	v.viewingActionables = true
+	v.nav.push(notesScreenActionables)
 	v.actionablesNoteID = note.ID
 	v.actionablesTitle = noteActionablesTitle(note.SessionNote)
 	v.actionablesItems = nil
@@ -394,6 +466,9 @@ func (v *allNotesView) reextractActionables() tea.Cmd {
 
 func (v *allNotesView) closeActionablesPanel() {
 	v.viewingActionables = false
+	if v.nav.peek() == notesScreenActionables {
+		v.nav.pop()
+	}
 	v.actionablesNoteID = 0
 	v.actionablesTitle = ""
 	v.actionablesItems = nil
@@ -595,12 +670,19 @@ func (v *allNotesView) renderBody(width, height int) string {
 	if width == 0 {
 		return "loading notes..."
 	}
-	if v.viewingActionables {
+	if v.nav.peek() == notesScreenActionables {
 		return renderNoteActionablesPanel(
 			v.actionablesTitle, v.actionablesItems,
 			v.extractingActionables, v.actionablesExtractErr,
 			width, height, v.styles,
 		)
+	}
+	if v.nav.peek() == notesScreenEdit {
+		v.editor.Resize(v.editorWidth(), v.editorHeight())
+		return v.renderEditor(width, height)
+	}
+	if v.search.active {
+		return v.search.render(width, height, v.styles)
 	}
 	if v.picking {
 		v.ensureCursorVisible()
@@ -631,7 +713,8 @@ func (v *allNotesView) renderBrowse(width, height int) string {
 	}
 
 	var lines []string
-	lines = append(lines, s.PaneTitle.Render("Open note"), "")
+	lines = append(lines, s.PaneTitle.Render("Open note")+"  "+s.Dim.Render("/ or ctrl+f — search"))
+	lines = append(lines, "")
 
 	end := v.offset + listH
 	if end > len(v.rows) {
@@ -708,6 +791,9 @@ func (v *allNotesView) editingNote() (store.GlobalNote, bool) {
 
 func (v *allNotesView) actionHints() []string {
 	s := v.styles
+	if v.search.active {
+		return searchActionHints(s, v.search.focus, len(v.search.results) > 0)
+	}
 	if v.viewingActionables {
 		return noteActionablesActionHints(s)
 	}
@@ -728,6 +814,8 @@ func (v *allNotesView) actionHints() []string {
 			}
 		}
 		hints := []string{
+			s.helpEntry("/", "search"),
+			s.helpEntry("ctrl+f", "search"),
 			s.helpEntry("↑↓", "move"),
 			s.helpEntry("enter", "open"),
 			s.helpEntry("d", "delete"),
@@ -741,6 +829,8 @@ func (v *allNotesView) actionHints() []string {
 	}
 	hints := []string{
 		s.helpEntry("y/p · ⌃c/v", "copy/paste"),
+		s.helpEntry("/? · ⌃f", "find in note"),
+		s.helpEntry("n/N", "next/prev match"),
 		s.helpEntry("u/:redo", "undo/redo"),
 		s.helpEntry("v/V", "select"),
 		s.helpEntry(":w", "save"),
@@ -754,6 +844,9 @@ func (v *allNotesView) actionHints() []string {
 
 func (v *allNotesView) infoHints() []string {
 	s := v.styles
+	if v.search.active {
+		return searchInfoHints(s, v.cfg, v.search.query, len(v.search.results), v.search.loading, v.search.resultsPrelim)
+	}
 	if !v.picking {
 		var hints []string
 		hints = append(hints, modeStyle(v.editor.mode, s).Render(v.editor.ModeLabel()))
@@ -787,6 +880,9 @@ func (v *allNotesView) infoHints() []string {
 }
 
 func (v *allNotesView) escIsLocal() bool {
+	if v.search.active {
+		return true
+	}
 	if v.viewingActionables {
 		return true
 	}

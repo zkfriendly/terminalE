@@ -56,6 +56,9 @@ type zoneView struct {
 	actionablesItems      []string
 	extractingActionables bool
 	actionablesExtractErr string
+
+	noteSearch notesSearchState
+	noteNav    notesNavStack
 }
 
 type noteEnrichedMsg struct {
@@ -94,6 +97,8 @@ func (z *zoneView) update(msg tea.Msg) tea.Cmd {
 	case noteActionablesExtractedMsg:
 		z.onNoteActionablesExtracted(msg)
 		return nil
+	case notesSearchAnswerMsg:
+		return z.noteSearch.onAnswer(msg)
 	case tea.KeyPressMsg, tea.PasteMsg:
 		return z.handleInput(msg)
 	}

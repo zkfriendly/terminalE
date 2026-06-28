@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/zkfriendly/zone/internal/config"
@@ -35,22 +34,18 @@ type settingsView struct {
 	width, height int
 	cursor        int
 	offset        int
-	editing       bool
-	input         textinput.Model
+	prompt        panelInput
 	err           string
 
 	fields []settingField
 }
 
 func newSettings(cfg *config.Config, s Styles, configPath string) *settingsView {
-	ti := textinput.New()
-	ti.Prompt = "  "
-	ti.CharLimit = 200
 	return &settingsView{
 		cfg:        cfg,
 		styles:     s,
 		configPath: configPath,
-		input:      ti,
+		prompt:     newPanelInput("  ", "", 200),
 		fields:     settingsFields(),
 	}
 }
@@ -70,12 +65,12 @@ func settingsFields() []settingField {
 func (v *settingsView) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if v.editing {
+		if v.prompt.IsFocused() {
 			return v.updateInput(msg)
 		}
 		return v.updateNormal(msg)
 	case tea.PasteMsg:
-		if v.editing {
+		if v.prompt.IsFocused() {
 			return v.updateInput(msg)
 		}
 	}
@@ -116,31 +111,24 @@ func (v *settingsView) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (v *settingsView) updateInput(msg tea.Msg) tea.Cmd {
-	if key, ok := msg.(tea.KeyPressMsg); ok {
-		switch key.String() {
-		case "esc":
-			v.editing = false
-			v.input.Blur()
-			v.input.Reset()
-			return nil
-		case "enter":
-			val := strings.TrimSpace(v.input.Value())
-			v.editing = false
-			v.input.Blur()
-			v.input.Reset()
-			if val == "" {
-				return nil
-			}
-			if err := v.applyInput(val); err != nil {
-				v.err = err.Error()
-			} else {
-				v.save()
-			}
-			return nil
+	cmd, act := v.prompt.handleMsg(msg)
+	switch act {
+	case panelInputCancel:
+		v.prompt.Reset()
+		return cmd
+	case panelInputSubmit:
+		val := strings.TrimSpace(v.prompt.Value())
+		v.prompt.Reset()
+		if val == "" {
+			return cmd
 		}
+		if err := v.applyInput(val); err != nil {
+			v.err = err.Error()
+		} else {
+			v.save()
+		}
+		return cmd
 	}
-	var cmd tea.Cmd
-	v.input, cmd = v.input.Update(msg)
 	return cmd
 }
 
@@ -149,10 +137,9 @@ func (v *settingsView) startInput() tea.Cmd {
 	if f == nil {
 		return nil
 	}
-	v.editing = true
-	v.input.Placeholder = f.label
-	v.input.SetValue(v.fieldValue(*f))
-	return v.input.Focus()
+	v.prompt.SetPlaceholder(f.label)
+	v.prompt.SetValue(v.fieldValue(*f))
+	return v.prompt.focusCmd()
 }
 
 func (v *settingsView) currentField() *settingField {
@@ -308,8 +295,8 @@ func (v *settingsView) renderBody(width, height int) string {
 		rows = append(rows, v.renderRow(i, f))
 	}
 
-	if v.editing {
-		rows = append(rows, "", v.input.View())
+	if v.prompt.IsFocused() {
+		rows = append(rows, "", v.prompt.View())
 	}
 
 	body := strings.Join(rows, "\n")
@@ -325,7 +312,7 @@ func (v *settingsView) renderBody(width, height int) string {
 }
 
 func (v *settingsView) actionHints() []string {
-	if v.editing {
+	if v.prompt.IsFocused() {
 		return []string{v.styles.helpEntry("enter", "save"), v.styles.helpEntry("esc", "cancel")}
 	}
 	return []string{
@@ -340,7 +327,7 @@ func (v *settingsView) infoHints() []string {
 }
 
 func (v *settingsView) escIsLocal() bool {
-	return v.editing
+	return v.prompt.IsFocused()
 }
 
 func (v *settingsView) render(width, height int) string {

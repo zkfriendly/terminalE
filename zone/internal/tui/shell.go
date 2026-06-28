@@ -83,6 +83,8 @@ func (sh *shell) updateNav(msg tea.KeyPressMsg) tea.Cmd {
 				return sh.selectPage(shellPage(idx))
 			}
 		}
+		// Any other key closes the switcher and goes to the current page.
+		sh.focusNav = false
 	}
 	return nil
 }
