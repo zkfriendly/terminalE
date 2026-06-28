@@ -69,11 +69,12 @@ bar at the bottom shows key hints; the title row shows the clock and session sta
 
 | Key                   | Action                                                                                 |
 | --------------------- | -------------------------------------------------------------------------------------- |
-| `←`/`→`, `h/l`        | Switch between Projects and Tasks panes                                                |
-| `↑`/`↓`, `j/k`        | Move selection in the active pane                                                      |
-| `enter`, `f`, `space` | Start focus (Tasks pane), switch to Tasks (Projects pane), or resume a running session |
+| `←`/`→`, `h/l`        | Move between nested task levels                                                      |
+| `↑`/`↓`, `j/k`        | Move selection in the active column                                                  |
+| `enter`, `f`, `space` | Start focus on selected task, or resume a running session                            |
 | `R`                   | Resume the session you ended early (when the banner is shown)                          |
-| `n`                   | New project or task (depends on pane)                                                  |
+| `n`                   | New top-level task                                                                   |
+| `N`                   | New child task under the selected task                                               |
 | `e`                   | Rename selected project or task                                                        |
 | `d`                   | Archive selected project or task                                                       |
 | `t`                   | Start/stop standalone time tracking on the selected task                               |

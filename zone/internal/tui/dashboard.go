@@ -248,13 +248,12 @@ func (d *dashboard) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 		d.move(-1)
 	case "down", "j":
 		d.move(1)
-	case "N":
-		return d.startInput(modeNewProject, "top-level task", "")
 	case "n":
+		return d.startInput(modeNewProject, "top-level task", "")
+	case "N":
 		if t, ok := d.currentTask(); ok {
 			return d.startInput(modeNewTask, "child of "+t.Title, "")
 		}
-		return d.startInput(modeNewProject, "top-level task", "")
 	case "e":
 		if t, ok := d.currentTask(); ok {
 			return d.startInput(modeRenameTask, "task title", t.Title)
@@ -409,8 +408,8 @@ func (d *dashboard) actionHints() []string {
 		d.styles.helpEntry("←→", "level"),
 		d.styles.helpEntry("enter/f", "focus"),
 		d.styles.helpEntry("t", "track"),
-		d.styles.helpEntry("n", "child"),
-		d.styles.helpEntry("N", "top task"),
+		d.styles.helpEntry("n", "top task"),
+		d.styles.helpEntry("N", "child"),
 		d.styles.helpEntry("e", "rename"),
 		d.styles.helpEntry("x", "done"),
 		d.styles.helpEntry("d", "archive"),
@@ -489,7 +488,7 @@ func (d *dashboard) renderTasks(w, h int) string {
 		title := d.renderColumnTitle("Tasks", true)
 		content := title + "\n" + strings.Join([]string{
 			d.styles.Dim.Render("no tasks"),
-			d.styles.Dim.Render("N to create a top-level task"),
+			d.styles.Dim.Render("n to create a top-level task"),
 		}, "\n")
 		if d.mode == modeNewProject || d.mode == modeNewTask || d.mode == modeRenameProject || d.mode == modeRenameTask {
 			content += "\n\n" + d.prompt.View()
@@ -563,7 +562,7 @@ func (d *dashboard) renderTaskColumn(idx, w, h int, col taskColumn) string {
 	var lines []string
 	if len(col.tasks) == 0 {
 		lines = append(lines, d.styles.Dim.Render("no tasks"))
-		lines = append(lines, d.styles.Dim.Render("N to create a top-level task"))
+		lines = append(lines, d.styles.Dim.Render("n to create a top-level task"))
 	}
 	for _, t := range col.tasks {
 		lines = append(lines, d.renderTaskLine(t, w, active))
