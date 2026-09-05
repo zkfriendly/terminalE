@@ -12,13 +12,13 @@ func TestRenderLLMStatus(t *testing.T) {
 	s := newStyles()
 	llm.ResetStats()
 
-	off := renderLLMStatus(s, config.Config{LMStudioEnabled: false})
+	off := renderLLMStatus(s, config.Config{LLMEnabled: false})
 	if !strings.Contains(off, "llm") || !strings.Contains(off, "off") {
 		t.Fatalf("expected off status: %q", off)
 	}
 
 	llm.ResetStats()
-	cfg := config.Config{LMStudioEnabled: true, LMStudioModel: "qwen/qwen3-test"}
+	cfg := config.Config{LLMEnabled: true, LLMProvider: config.ProviderLocal, LMStudioModel: "qwen/qwen3-test"}
 	on := renderLLMStatus(s, cfg)
 	if !strings.Contains(on, "qwen3-test") {
 		t.Fatalf("expected model in status: %q", on)

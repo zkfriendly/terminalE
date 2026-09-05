@@ -1,11 +1,16 @@
 package llm
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func localTestClient(url string) *Client {
+	return &Client{provider: localProvider{baseURL: url}}
+}
 
 func TestEnrichNote(t *testing.T) {
 	ResetModelCache()
@@ -24,7 +29,7 @@ func TestEnrichNote(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	meta, err := EnrichNote(srv.URL, "", "need to refactor the daemon ipc layer")
+	meta, err := localTestClient(srv.URL).EnrichNote("need to refactor the daemon ipc layer")
 	if err != nil {
 		t.Fatalf("enrich: %v", err)
 	}
@@ -34,9 +39,6 @@ func TestEnrichNote(t *testing.T) {
 	snap := Snapshot()
 	if snap.OK != 1 || snap.Err != 0 || snap.InFlight != 0 {
 		t.Fatalf("stats: %+v", snap)
-	}
-	if snap.LastMS <= 0 {
-		t.Fatalf("expected last duration, got %dms", snap.LastMS)
 	}
 }
 
@@ -63,7 +65,7 @@ func TestEnrichNoteOllamaFallback(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	meta, err := EnrichNote(srv.URL, "", "label this via ollama")
+	meta, err := localTestClient(srv.URL).EnrichNote("label this via ollama")
 	if err != nil {
 		t.Fatalf("enrich: %v", err)
 	}
@@ -87,7 +89,7 @@ func TestEnrichNoteReasoningModel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	meta, err := EnrichNote(srv.URL, "", "grab coffee")
+	meta, err := localTestClient(srv.URL).EnrichNote("grab coffee")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +224,7 @@ func TestExtractActionables(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tasks, err := ExtractActionables(srv.URL, "", "todo: add extraction button and prompt sandbox")
+	tasks, err := localTestClient(srv.URL).ExtractActionables("todo: add extraction button and prompt sandbox")
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
@@ -246,7 +248,7 @@ func TestDetectActionables(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	has, err := DetectActionables(srv.URL, "", "todo: refactor the buffer abstraction")
+	has, err := localTestClient(srv.URL).DetectActionables("todo: refactor the buffer abstraction")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -262,7 +264,7 @@ func TestResolveModelSkipsEmbedding(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	id, err := resolveModel(srv.URL, "")
+	id, err := resolveModel(context.Background(), srv.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}

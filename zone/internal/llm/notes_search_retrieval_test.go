@@ -20,7 +20,7 @@ func TestExpandNotesSearchQuery(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp, err := ExpandNotesSearchQuery(srv.URL, "", "what do I know about ZK proofs")
+	exp, err := localTestClient(srv.URL).ExpandNotesSearchQuery("what do I know about ZK proofs")
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestRerankNotesForQuery(t *testing.T) {
 		{ID: 3, Body: "deployment notes"},
 		{ID: 17, Body: "whir protocol buffer"},
 	}
-	ids, err := RerankNotesForQuery(srv.URL, "", "whir protocol", catalog, 10)
+	ids, err := localTestClient(srv.URL).RerankNotesForQuery("whir protocol", catalog, 10)
 	if err != nil {
 		t.Fatalf("rerank: %v", err)
 	}

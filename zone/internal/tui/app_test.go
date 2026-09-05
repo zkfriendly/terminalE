@@ -18,7 +18,7 @@ import (
 
 func testCfg() config.Config {
 	c := config.Default()
-	c.LMStudioEnabled = false
+	c.LLMEnabled = false
 	return c
 }
 
@@ -29,6 +29,9 @@ func testCfgPtr() *config.Config {
 
 func newTestApp(t *testing.T) (*App, *store.Store) {
 	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("APPDATA", dir)
 	database, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -780,7 +783,7 @@ func TestNoteLabelDisabledLeavesUnlabeled(t *testing.T) {
 	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
 
 	cfg := config.Default()
-	cfg.LMStudioEnabled = false
+	cfg.LLMEnabled = false
 
 	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})
 	z.openNotes()
@@ -797,7 +800,7 @@ func TestNoteLabelDisabledLeavesUnlabeled(t *testing.T) {
 	if z.noteLabelErr == "" {
 		t.Fatal("expected disabled labeling message")
 	}
-	if !strings.Contains(z.noteLabelErr, "Local LLM labeling") {
+	if !strings.Contains(z.noteLabelErr, "AI notes") {
 		t.Fatalf("expected config hint, got %q", z.noteLabelErr)
 	}
 	notes, _ := st.ListSessionNotes(sess.ID)
@@ -828,7 +831,8 @@ func TestNoteSaveTriggersEnrich(t *testing.T) {
 	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
 
 	cfg := config.Default()
-	cfg.LMStudioEnabled = true
+	cfg.LLMEnabled = true
+	cfg.LLMProvider = config.ProviderLocal
 	cfg.LMStudioURL = srv.URL
 
 	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})
@@ -874,7 +878,8 @@ func TestNoteSaveTriggersActionableScan(t *testing.T) {
 	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
 
 	cfg := config.Default()
-	cfg.LMStudioEnabled = true
+	cfg.LLMEnabled = true
+	cfg.LLMProvider = config.ProviderLocal
 	cfg.LMStudioURL = srv.URL
 
 	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})
@@ -921,7 +926,8 @@ func TestNoteEnrichErrorLeavesUnlabeled(t *testing.T) {
 	sess, _ := st.CreateSession(&task.ID, 3000, 600, 14400, 180)
 
 	cfg := config.Default()
-	cfg.LMStudioEnabled = true
+	cfg.LLMEnabled = true
+	cfg.LLMProvider = config.ProviderLocal
 	cfg.LMStudioURL = srv.URL
 
 	z := newZone(st, nil, newStyles(), &cfg, session.Snapshot{SessionID: sess.ID, Phase: "work"})

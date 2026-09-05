@@ -10,15 +10,15 @@ import (
 
 func renderLLMStatus(s Styles, cfg config.Config) string {
 	label := s.HelpKey.Render("llm")
-	if !cfg.LMStudioEnabled {
+	if !cfg.LLMEnabled {
 		return label + " " + s.Dim.Render("off")
 	}
 
 	snap := llm.Snapshot()
-	parts := []string{label, s.Dim.Render(llm.ModelLabel(cfg.LMStudioModel))}
+	parts := []string{label, s.Dim.Render(llm.StatusLabel(cfg))}
 
 	if snap.InFlight > 0 {
-		parts = append(parts, s.Accent.Render(fmt.Sprintf("%d labeling", snap.InFlight)))
+		parts = append(parts, s.Accent.Render(fmt.Sprintf("%d working", snap.InFlight)))
 	}
 	if snap.OK > 0 {
 		parts = append(parts, s.Work.Render(fmt.Sprintf("%d ok", snap.OK)))

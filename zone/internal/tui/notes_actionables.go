@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/zkfriendly/zone/internal/config"
-	"github.com/zkfriendly/zone/internal/llm"
 	"github.com/zkfriendly/zone/internal/store"
 )
 
@@ -26,7 +25,8 @@ func noteActionablesTitle(n store.SessionNote) string {
 }
 
 func extractNoteActionablesCmd(cfg *config.Config, noteID int64, body string) tea.Cmd {
-	if err := noteLabelStatusErr(cfg); err != nil {
+	client, err := newNotesClient(cfg)
+	if err != nil {
 		return func() tea.Msg {
 			return noteActionablesExtractedMsg{noteID: noteID, err: err}
 		}
@@ -35,10 +35,8 @@ func extractNoteActionablesCmd(cfg *config.Config, noteID int64, body string) te
 	if body == "" {
 		return nil
 	}
-	baseURL := cfg.LMStudioURL
-	model := cfg.LMStudioModel
 	return func() tea.Msg {
-		tasks, err := llm.ExtractActionables(baseURL, model, body)
+		tasks, err := client.ExtractActionables(body)
 		if err != nil {
 			return noteActionablesExtractedMsg{noteID: noteID, err: err}
 		}

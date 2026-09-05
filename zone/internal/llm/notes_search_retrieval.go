@@ -17,16 +17,10 @@ var searchExpansionRE = regexp.MustCompile(`(?s)\{[^{}]*"keywords"\s*:\s*\[[^\]]
 var rerankIDsRE = regexp.MustCompile(`(?s)\{[^{}]*"ids"\s*:\s*\[[^\]]*\]\s*\}`)
 
 // ExpandNotesSearchQuery asks the LLM for keyword variants and a hypothetical matching note.
-func ExpandNotesSearchQuery(baseURL, model, question string) (SearchExpansion, error) {
-	baseURL = strings.TrimRight(baseURL, "/")
+func (c *Client) ExpandNotesSearchQuery(question string) (SearchExpansion, error) {
 	question = strings.TrimSpace(question)
-	if baseURL == "" || question == "" {
-		return SearchExpansion{}, fmt.Errorf("empty query or llm url")
-	}
-
-	modelID, err := resolveModel(baseURL, model)
-	if err != nil {
-		return SearchExpansion{}, err
+	if question == "" {
+		return SearchExpansion{}, fmt.Errorf("question is empty")
 	}
 
 	prompt := `The user is searching their focus-session notes. Question:
@@ -38,7 +32,7 @@ Reply with ONLY one JSON object:
 keywords: 3–8 concrete search terms — synonyms, related concepts, project names, acronyms (not filler words).
 hyde: one short hypothetical note sentence that would answer the question (for semantic matching).`
 
-	text, err := localChat(baseURL, modelID,
+	text, err := c.chat(
 		"You expand note search queries. Output only raw JSON.",
 		prompt,
 		0.2,
@@ -51,22 +45,16 @@ hyde: one short hypothetical note sentence that would answer the question (for s
 
 // RerankNotesForQuery asks the LLM which notes best match the question.
 // Returns note IDs in relevance order (most relevant first).
-func RerankNotesForQuery(baseURL, model, question string, catalog []NoteSnippet, limit int) ([]int64, error) {
-	baseURL = strings.TrimRight(baseURL, "/")
+func (c *Client) RerankNotesForQuery(question string, catalog []NoteSnippet, limit int) ([]int64, error) {
 	question = strings.TrimSpace(question)
-	if baseURL == "" || question == "" {
-		return nil, fmt.Errorf("empty query or llm url")
+	if question == "" {
+		return nil, fmt.Errorf("question is empty")
 	}
 	if len(catalog) == 0 {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 50
-	}
-
-	modelID, err := resolveModel(baseURL, model)
-	if err != nil {
-		return nil, err
 	}
 
 	prompt := `Question: ` + question + `
@@ -79,7 +67,7 @@ Reply with ONLY one JSON object:
 
 List note IDs from the catalog (the id= numbers, or [n] entry numbers), best first. Include notes related by meaning even when exact words differ. Omit irrelevant notes. Max ` + fmt.Sprintf("%d", limit) + ` ids.`
 
-	text, err := localChat(baseURL, modelID,
+	text, err := c.chat(
 		"You rank notes by relevance to a question. Output only raw JSON.",
 		prompt,
 		0.1,

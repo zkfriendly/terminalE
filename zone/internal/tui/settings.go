@@ -16,6 +16,7 @@ const (
 	settingInt settingKind = iota
 	settingBool
 	settingString
+	settingChoice
 )
 
 type settingField struct {
@@ -55,8 +56,11 @@ func settingsFields() []settingField {
 		{label: "Work (min)", kind: settingInt},
 		{label: "Break (min)", kind: settingInt},
 		{label: "Total session (min)", kind: settingInt},
-		{section: "Notes", label: "Local LLM labeling", kind: settingBool},
-		{label: "Local LLM URL", kind: settingString},
+		{section: "Notes", label: "AI notes", kind: settingBool},
+		{label: "AI provider", kind: settingChoice},
+		{section: "Codex", label: "Codex command", kind: settingString},
+		{label: "Codex model", kind: settingString},
+		{section: "Local server", label: "Local LLM URL", kind: settingString},
 		{label: "Local LLM model", kind: settingString},
 	}
 }
@@ -99,7 +103,7 @@ func (v *settingsView) updateNormal(msg tea.KeyPressMsg) tea.Cmd {
 			switch f.kind {
 			case settingInt, settingString:
 				return v.startInput()
-			case settingBool:
+			case settingBool, settingChoice:
 				v.toggleOrCycle()
 			}
 		}
@@ -118,7 +122,7 @@ func (v *settingsView) updateInput(msg tea.Msg) tea.Cmd {
 	case panelInputSubmit:
 		val := strings.TrimSpace(v.prompt.Value())
 		v.prompt.Reset()
-		if val == "" {
+		if val == "" && v.currentField() != nil && v.currentField().kind != settingString {
 			return cmd
 		}
 		if err := v.applyInput(val); err != nil {
@@ -158,8 +162,14 @@ func (v *settingsView) fieldValue(f settingField) string {
 		return strconv.Itoa(v.cfg.BreakMinutes)
 	case "Total session (min)":
 		return strconv.Itoa(v.cfg.TotalMinutes)
-	case "Local LLM labeling":
-		return boolLabel(v.cfg.LMStudioEnabled)
+	case "AI notes":
+		return boolLabel(v.cfg.LLMEnabled)
+	case "AI provider":
+		return v.cfg.EffectiveLLMProvider()
+	case "Codex command":
+		return v.cfg.CodexCommand
+	case "Codex model":
+		return v.cfg.CodexModel
 	case "Local LLM URL":
 		return v.cfg.LMStudioURL
 	case "Local LLM model":
@@ -182,8 +192,14 @@ func (v *settingsView) toggleOrCycle() {
 		return
 	}
 	switch f.label {
-	case "Local LLM labeling":
-		v.cfg.LMStudioEnabled = !v.cfg.LMStudioEnabled
+	case "AI notes":
+		v.cfg.LLMEnabled = !v.cfg.LLMEnabled
+	case "AI provider":
+		if v.cfg.EffectiveLLMProvider() == config.ProviderCodex {
+			v.cfg.LLMProvider = config.ProviderLocal
+		} else {
+			v.cfg.LLMProvider = config.ProviderCodex
+		}
 	default:
 		return
 	}
@@ -220,6 +236,10 @@ func (v *settingsView) applyInput(val string) error {
 			return fmt.Errorf("total minutes must be > 0")
 		}
 		v.cfg.TotalMinutes = n
+	case "Codex command":
+		v.cfg.CodexCommand = val
+	case "Codex model":
+		v.cfg.CodexModel = val
 	case "Local LLM URL":
 		v.cfg.LMStudioURL = val
 	case "Local LLM model":
@@ -317,12 +337,16 @@ func (v *settingsView) actionHints() []string {
 	return []string{
 		v.styles.helpEntry("↑↓", "move"),
 		v.styles.helpEntry("enter", "edit"),
-		v.styles.helpEntry("space", "toggle"),
+		v.styles.helpEntry("space", "toggle / switch"),
 	}
 }
 
 func (v *settingsView) infoHints() []string {
-	return []string{v.styles.Dim.Render(truncate(v.configPath, 60))}
+	providerHint := "Local server processes note text"
+	if v.cfg.EffectiveLLMProvider() == config.ProviderCodex {
+		providerHint = "Codex processes note text using your Codex account"
+	}
+	return []string{v.styles.Dim.Render(providerHint), v.styles.Dim.Render(truncate(v.configPath, 60))}
 }
 
 func (v *settingsView) escIsLocal() bool {

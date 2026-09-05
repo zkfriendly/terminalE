@@ -38,15 +38,15 @@ type notesSearchState struct {
 	queryInput panelInput
 	chatInput  panelInput
 
-	query        string
-	results      []store.GlobalNote
+	query         string
+	results       []store.GlobalNote
 	resultsPrelim bool
-	resultCursor int
-	chat         []notesChatTurn
-	loading      bool
-	err          string
-	reqID        int
-	onDismiss    func()
+	resultCursor  int
+	chat          []notesChatTurn
+	loading       bool
+	err           string
+	reqID         int
+	onDismiss     func()
 }
 
 type noteSearchOpenHandler func(n store.GlobalNote)
@@ -177,16 +177,15 @@ func (s *notesSearchState) chatHistory() []llm.ChatTurn {
 }
 
 func (s *notesSearchState) answerCmd(cfg *config.Config, reqID int, question string, history []llm.ChatTurn) tea.Cmd {
-	if err := noteLabelStatusErr(cfg); err != nil {
+	client, err := newNotesClient(cfg)
+	if err != nil {
 		return func() tea.Msg {
 			return notesSearchAnswerMsg{reqID: reqID, question: question, err: err}
 		}
 	}
 	ctx := llm.FormatNoteSnippets(noteSnippetsFromGlobal(s.results))
-	baseURL := cfg.LMStudioURL
-	model := cfg.LMStudioModel
 	return func() tea.Msg {
-		answer, err := llm.AnswerNotesQuestion(baseURL, model, question, ctx, history)
+		answer, err := client.AnswerNotesQuestion(question, ctx, history)
 		if err != nil {
 			return notesSearchAnswerMsg{reqID: reqID, question: question, err: err}
 		}
@@ -425,7 +424,7 @@ func (s *notesSearchState) render(width, height int, styles Styles) string {
 		selected := s.focus == searchFocusResults && i == s.resultCursor
 		line := renderSearchResultLine(n, innerW-2, styles)
 		if selected {
-			line = styles.ItemSel.Render(" "+line+" ")
+			line = styles.ItemSel.Render(" " + line + " ")
 		} else {
 			line = "  " + line
 		}

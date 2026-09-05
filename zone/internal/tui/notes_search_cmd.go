@@ -10,13 +10,14 @@ import (
 const notesSearchResultLimit = 50
 
 func searchNotesCmd(st *store.Store, cfg *config.Config, reqID int, question string, history []llm.ChatTurn) tea.Cmd {
+	client, err := newNotesClient(cfg)
 	return func() tea.Msg {
-		if err := noteLabelStatusErr(cfg); err != nil {
+		if err != nil {
 			return notesSearchAnswerMsg{reqID: reqID, question: question, err: err}
 		}
 
 		keywordHits := preliminaryNotesSearch(st, question)
-		results := aiEnhanceSearch(st, cfg, question, keywordHits, notesSearchResultLimit)
+		results := enhanceNotesWithClient(st, client, question, keywordHits, notesSearchResultLimit)
 		if len(results) == 0 {
 			results = keywordHits
 		}
@@ -25,7 +26,7 @@ func searchNotesCmd(st *store.Store, cfg *config.Config, reqID int, question str
 		}
 
 		ctx := llm.FormatNoteSnippets(noteSnippetsFromGlobal(results))
-		answer, ansErr := llm.AnswerNotesQuestion(cfg.LMStudioURL, cfg.LMStudioModel, question, ctx, history)
+		answer, ansErr := client.AnswerNotesQuestion(question, ctx, history)
 		msg := notesSearchAnswerMsg{
 			reqID:    reqID,
 			question: question,
@@ -59,10 +60,15 @@ func aiSearchNotes(st *store.Store, cfg *config.Config, question string, limit i
 }
 
 func aiEnhanceSearch(st *store.Store, cfg *config.Config, question string, keywordHits []store.GlobalNote, limit int) []store.GlobalNote {
-	baseURL := cfg.LMStudioURL
-	model := cfg.LMStudioModel
+	client, err := newNotesClient(cfg)
+	if err != nil {
+		return trimNotes(keywordHits, limit)
+	}
+	return enhanceNotesWithClient(st, client, question, keywordHits, limit)
+}
 
-	expansion, expandErr := llm.ExpandNotesSearchQuery(baseURL, model, question)
+func enhanceNotesWithClient(st *store.Store, client *llm.Client, question string, keywordHits []store.GlobalNote, limit int) []store.GlobalNote {
+	expansion, expandErr := client.ExpandNotesSearchQuery(question)
 
 	var lists [][]store.GlobalNote
 	appendList := func(list []store.GlobalNote) {
@@ -91,7 +97,7 @@ func aiEnhanceSearch(st *store.Store, cfg *config.Config, question string, keywo
 	}
 
 	snippets := noteSnippetsFromGlobal(candidates)
-	ids, rerankErr := llm.RerankNotesForQuery(baseURL, model, question, snippets, limit)
+	ids, rerankErr := client.RerankNotesForQuery(question, snippets, limit)
 	if rerankErr != nil || len(ids) == 0 {
 		return mergeKeywordFirst(keywordHits, candidates, limit)
 	}

@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/zkfriendly/zone/internal/llm"
 	"github.com/zkfriendly/zone/internal/store"
 )
 
@@ -167,7 +166,8 @@ func (z *zoneView) scheduleNoteLabel(noteID int64, body string) tea.Cmd {
 }
 
 func (z *zoneView) enrichNoteCmd(noteID int64, body string) tea.Cmd {
-	if err := z.labelStatusErr(); err != nil {
+	client, err := newNotesClient(z.cfg)
+	if err != nil {
 		return func() tea.Msg { return z.labelErrorMsg(noteID, err) }
 	}
 	body = strings.TrimSpace(body)
@@ -175,10 +175,8 @@ func (z *zoneView) enrichNoteCmd(noteID int64, body string) tea.Cmd {
 		return nil
 	}
 	z.enrichingNotes[noteID] = true
-	baseURL := z.cfg.LMStudioURL
-	model := z.cfg.LMStudioModel
 	return func() tea.Msg {
-		meta, err := llm.EnrichNote(baseURL, model, body)
+		meta, err := client.EnrichNote(body)
 		if err != nil {
 			return noteEnrichedMsg{noteID: noteID, err: err}
 		}

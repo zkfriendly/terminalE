@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Stats holds LLM labeling counters for the current process.
+// Stats holds note AI operation counters for the current process.
 type Stats struct {
 	InFlight int64
 	OK       int64

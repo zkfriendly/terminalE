@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/zkfriendly/zone/internal/config"
-	"github.com/zkfriendly/zone/internal/llm"
 	"github.com/zkfriendly/zone/internal/store"
 )
 
@@ -38,15 +37,15 @@ type allNotesView struct {
 	actionablesExtractErr string
 
 	search notesSearchState
-	nav   notesNavStack
+	nav    notesNavStack
 }
 
 func newAllNotes(st *store.Store, cfg *config.Config, s Styles) *allNotesView {
 	v := &allNotesView{
-		store:          st,
-		cfg:            cfg,
-		styles:         s,
-		picking:        true,
+		store:               st,
+		cfg:                 cfg,
+		styles:              s,
+		picking:             true,
 		enrichingNotes:      map[int64]bool{},
 		scanningActionables: map[int64]bool{},
 	}
@@ -378,7 +377,8 @@ func (v *allNotesView) scheduleNoteLabel(noteID int64, body string) tea.Cmd {
 }
 
 func (v *allNotesView) enrichNoteCmd(noteID int64, body string) tea.Cmd {
-	if err := noteLabelStatusErr(v.cfg); err != nil {
+	client, err := newNotesClient(v.cfg)
+	if err != nil {
 		return func() tea.Msg {
 			return noteEnrichedMsg{noteID: noteID, err: err}
 		}
@@ -388,10 +388,8 @@ func (v *allNotesView) enrichNoteCmd(noteID int64, body string) tea.Cmd {
 		return nil
 	}
 	v.enrichingNotes[noteID] = true
-	baseURL := v.cfg.LMStudioURL
-	model := v.cfg.LMStudioModel
 	return func() tea.Msg {
-		meta, err := llm.EnrichNote(baseURL, model, body)
+		meta, err := client.EnrichNote(body)
 		if err != nil {
 			return noteEnrichedMsg{noteID: noteID, err: err}
 		}

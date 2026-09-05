@@ -26,7 +26,8 @@ chimes at each transition.
   the terminal. Reopen zone and it picks up right where you left off.
 - Live **stats**: today's focus time, last 7 days, current streak,
   per-project and per-task breakdowns, and recent session history.
-- Local-first: everything is in one SQLite database. No accounts, no network.
+- Local-first: projects, timers, and notes are stored in one SQLite database.
+  Optional AI features use Codex by default, or a configurable local model server.
 
 ## Install / Run
 
@@ -46,6 +47,11 @@ Data and config live in your user config directory:
 - Linux: `~/.config/zone/`
 
 Files: `zone.db` (database) and `config.json` (settings).
+
+AI note features default to the installed **Codex CLI**, using its existing
+sign-in (`codex login`). To use a local model instead, open **Config → AI provider**
+and press **enter** or **space** to select `local`. Turn **AI notes** off to disable
+AI requests entirely. Tracking and note editing work without an AI provider.
 
 On macOS that directory is `~/Library/Application Support/zone/`; on Linux it is
 `~/.config/zone/`. Open **Config** from the top nav to edit settings in
@@ -105,8 +111,9 @@ a session early (with confirmation); the dashboard will offer to resume it later
 **Session notes:** press `n` during a focus session to open the note browser.
 Press **`/`** or **`ctrl+f`** there (or on the **Notes** tab) to search all notes with an
 LLM summary and follow-up chat. Pick an earlier note to edit or choose **+ new note**. When you save a note,
-zone asks a local **[LM Studio](https://lmstudio.ai/)** server (OpenAI-compatible
-API) for a short **title** and **emoji** label. If labeling fails, zone shows the
+zone asks the selected AI provider for a short **title** and **emoji** label.
+Codex is the default; the local provider supports LM Studio's OpenAI-compatible
+API and Ollama. If labeling fails, zone shows the
 error and leaves the note **unlabeled** (empty title/emoji) so you can tell which
 notes still need labels. Editing is vim-style: insert,
 `esc` for normal, `i`/`a`/`o` to insert, `:w` to save, `:wq` or `ZZ` to save and
@@ -127,9 +134,9 @@ Browse from the top nav. Press `r` to refresh. `esc` returns to Work.
 
 Browse every session note from the top nav (**4:Notes**). Press **`/`** or **`ctrl+f`** to **search** your notes:
 type a natural-language question (e.g. `what about whir do I know`). Search is **LLM-assisted**:
-the local model expands your question into keywords and a hypothetical matching note (HyDE),
+the selected model expands your question into keywords and a hypothetical matching note (HyDE),
 merges keyword hits with reciprocal rank fusion, then **reranks** candidates by relevance before
-summarizing. Requires Local LLM enabled in Config (same server used for note labels). **`↑`/`↓`** selects a matching note (from the chat pane when the follow-up
+summarizing. Requires **AI notes** enabled in Config (same provider used for note labels and task extraction). **`↑`/`↓`** selects a matching note (from the chat pane when the follow-up
 box is empty, or from the results pane after **`tab`**). Press **`enter`** or **`o`**
 to open the highlighted note for editing.
 
@@ -171,7 +178,7 @@ focus time, wall time, and status).
 | --------- | ------------------------------- |
 | `↑` / `↓` | Select a setting                |
 | `enter`   | Edit numbers and text fields    |
-| `space`   | Toggle booleans                 |
+| `space`   | Toggle booleans / switch AI provider |
 
 ## Background focus daemon
 
@@ -199,17 +206,40 @@ session shape:
   "work_minutes": 50,
   "break_minutes": 10,
   "total_minutes": 240,
-  "lm_studio_enabled": true,
-  "lm_studio_url": "http://127.0.0.1:1234",
+  "llm_enabled": true,
+  "llm_provider": "codex",
+  "codex_command": "codex",
+  "codex_model": "",
+  "lm_studio_url": "http://127.0.0.1:11434",
   "lm_studio_model": ""
 }
 ```
 
-- `lm_studio_enabled`: when `true`, saved notes are labeled via LM Studio (must be
-  running with a model loaded and the local server started).
-- `lm_studio_url`: base URL for the OpenAI-compatible API (default LM Studio port).
-- `lm_studio_model`: model name passed to the API; leave empty to use `local-model`
-  (fine when only one model is loaded).
+- `llm_enabled`: enables note labels, actionable task detection/extraction, and
+  note search/chat. Old `lm_studio_enabled` settings are still read, including
+  `false`; `llm_enabled` takes precedence if both keys exist.
+- `llm_provider`: `codex` (default) or `local`. Switching takes effect for new
+  requests immediately and preserves each provider's settings. Existing config
+  files without this key also use Codex. An explicit provider choice is saved.
+- `codex_command`: executable name on `PATH` or a path to the Codex binary.
+  This is not a shell command; do not append arguments.
+- `codex_model`: optional model override. Empty uses the Codex CLI default.
+  Zone reuses Codex authentication but ignores its user config for these requests,
+  so coding-specific settings do not affect note processing. Clear this field in
+  Config to return to automatic model selection.
+- `lm_studio_url`: local server base URL, defaulting to Ollama's port `11434`.
+  For LM Studio, use `http://127.0.0.1:1234`. The local backend supports both
+  OpenAI-compatible and native Ollama endpoints.
+- `lm_studio_model`: local model name; leave empty to auto-detect a chat model.
+
+With Codex selected, note text and relevant search context are sent through your
+Codex account. Zone uses the documented
+[`codex exec` non-interactive interface](https://learn.chatgpt.com/docs/non-interactive-mode):
+requests run in temporary directories, use read-only sandboxing, disable shell,
+plugins, apps, hooks, and subagents, and do not persist Codex session history.
+Each request has a two-minute timeout; at most two Codex processes run at once.
+Missing Codex, sign-in errors, or invalid responses appear in Zone's existing
+error UI. Zone never automatically switches between cloud and local providers.
 
 - `prepare_minutes`: a one-off settle-in block before the first work block. It is
   not counted as work time. Set to `0` to start working immediately.
@@ -222,6 +252,7 @@ session shape:
 main.go              entry point: run TUI, or the `__daemon` background process
 internal/
   config/            settings (JSON) + session shape
+  llm/               shared note prompts/parsers + Codex and local server providers
   db/                SQLite open + embedded schema (WAL, foreign keys) + migrations
   store/             repositories: projects, tasks, sessions, entries, stats
   timer/             pure pomodoro state machine (work/break cycles) + tests
@@ -237,6 +268,14 @@ state to the database continuously so a session can be resumed. The TUI is a thi
 client that renders snapshots from the daemon and sends it commands over a Unix
 socket — which is what lets a session outlive the terminal that started it.
 
+All note AI features use `llm.Client`, which depends on the small `llm.Provider`
+interface. Backend selection is centralized in `llm.NewClient`; the built-in
+default lives in `config.DefaultLLMProvider`. Adding another provider requires a
+transport implementation and a factory/config option, without changing note
+prompts, parsing, or TUI feature code. Commands capture their provider settings
+before running, so editing Config does not change an in-flight search halfway
+through its expansion, reranking, and answer steps.
+
 ## Tech
 
 - [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) + Lip Gloss v2 for the TUI
@@ -247,4 +286,12 @@ socket — which is what lets a session outlive the terminal that started it.
 
 ```bash
 go test ./...
+```
+
+The normal suite uses a fake CLI process and local HTTP test servers, with no
+Codex account or network access required. To smoke-test the installed Codex CLI
+with a synthetic note:
+
+```bash
+ZONE_TEST_CODEX=1 go test ./internal/llm -run '^TestCodexLive$' -v -count=1
 ```

@@ -34,7 +34,7 @@ func TestAnswerNotesQuestion(t *testing.T) {
 	defer srv.Close()
 
 	ctx := FormatNoteSnippets([]NoteSnippet{{ID: 1, Body: "whir buffer API"}})
-	answer, err := AnswerNotesQuestion(srv.URL, "", "what about whir do I know", ctx, nil)
+	answer, err := localTestClient(srv.URL).AnswerNotesQuestion("what about whir do I know", ctx, nil)
 	if err != nil {
 		t.Fatalf("answer: %v", err)
 	}

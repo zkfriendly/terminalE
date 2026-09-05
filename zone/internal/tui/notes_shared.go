@@ -72,13 +72,7 @@ func noteLabelStatusErr(cfg *config.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("labeling unavailable (config missing)")
 	}
-	if !cfg.LMStudioEnabled {
-		return fmt.Errorf("Local LLM labeling disabled — enable Local LLM labeling in settings")
-	}
-	if cfg.LMStudioURL == "" {
-		return fmt.Errorf("Local LLM URL is empty in settings")
-	}
-	return nil
+	return cfg.ValidateLLM()
 }
 
 type noteActionablesScannedMsg struct {
@@ -88,7 +82,8 @@ type noteActionablesScannedMsg struct {
 }
 
 func scanNoteActionablesCmd(cfg *config.Config, scanning map[int64]bool, noteID int64, body string) tea.Cmd {
-	if err := noteLabelStatusErr(cfg); err != nil {
+	client, err := newNotesClient(cfg)
+	if err != nil {
 		return nil
 	}
 	body = strings.TrimSpace(body)
@@ -96,10 +91,8 @@ func scanNoteActionablesCmd(cfg *config.Config, scanning map[int64]bool, noteID 
 		return nil
 	}
 	scanning[noteID] = true
-	baseURL := cfg.LMStudioURL
-	model := cfg.LMStudioModel
 	return func() tea.Msg {
-		has, err := llm.DetectActionables(baseURL, model, body)
+		has, err := client.DetectActionables(body)
 		if err != nil {
 			return noteActionablesScannedMsg{noteID: noteID, err: err}
 		}
@@ -240,4 +233,13 @@ func noteBrowseNotes(rows []noteBrowseRow) []store.SessionNote {
 		}
 	}
 	return notes
+}
+
+// Construct before launching a tea.Cmd, so a settings edit cannot change an
+// in-flight request's provider or model.
+func newNotesClient(cfg *config.Config) (*llm.Client, error) {
+	if err := noteLabelStatusErr(cfg); err != nil {
+		return nil, err
+	}
+	return llm.NewClient(*cfg)
 }

@@ -1,14 +1,10 @@
 package llm
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -16,63 +12,6 @@ import (
 type NoteMeta struct {
 	Title string `json:"title"`
 	Emoji string `json:"emoji"`
-}
-
-type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Temperature float64       `json:"temperature"`
-}
-
-type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-func noteChatRequest(modelID, system, user string, temperature float64) ([]byte, error) {
-	return json.Marshal(chatRequest{
-		Model: modelID,
-		Messages: []chatMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: user},
-		},
-		Temperature: temperature,
-	})
-}
-
-type chatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-		} `json:"message"`
-	} `json:"choices"`
-}
-
-type modelsResponse struct {
-	Data []struct {
-		ID string `json:"id"`
-	} `json:"data"`
-}
-
-type ollamaTagsResponse struct {
-	Models []struct {
-		Name  string `json:"name"`
-		Model string `json:"model"`
-	} `json:"models"`
-}
-
-type ollamaChatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
-	Options  struct {
-		Temperature float64 `json:"temperature"`
-	} `json:"options"`
-}
-
-type ollamaChatResponse struct {
-	Message chatMessage `json:"message"`
 }
 
 var jsonBlockRE = regexp.MustCompile(`(?s)\{[^{}]*"emoji"\s*:\s*"[^"]*"\s*,\s*"title"\s*:\s*"[^"]*"\s*\}`)
@@ -88,14 +27,8 @@ const ActionablesExtractVersion = 1
 
 var tasksBlockRE = regexp.MustCompile(`(?s)\{[^{}]*"tasks"\s*:\s*\[[^\]]*\]\s*\}`)
 
-var (
-	resolvedModel   string
-	resolvedModels  = map[string]string{}
-	resolvedModelMu sync.Mutex
-)
-
-// EnrichNote asks a local LLM server to suggest an emoji and short title.
-func EnrichNote(baseURL, model, body string) (NoteMeta, error) {
+// EnrichNote asks the selected provider to suggest an emoji and short title.
+func (c *Client) EnrichNote(body string) (NoteMeta, error) {
 	start := time.Now()
 	recordBegin()
 	fail := func(err error) (NoteMeta, error) {
@@ -103,10 +36,6 @@ func EnrichNote(baseURL, model, body string) (NoteMeta, error) {
 		return NoteMeta{}, err
 	}
 
-	baseURL = strings.TrimRight(baseURL, "/")
-	if baseURL == "" {
-		return fail(fmt.Errorf("local llm url is empty"))
-	}
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return fail(fmt.Errorf("note body is empty"))
@@ -115,18 +44,13 @@ func EnrichNote(baseURL, model, body string) (NoteMeta, error) {
 		body = body[:4000]
 	}
 
-	modelID, err := resolveModel(baseURL, model)
-	if err != nil {
-		return fail(err)
-	}
-
 	prompt := `Label this focus-session note. Reply with ONLY one JSON object on a single line.
 Use keys "emoji" (one emoji) and "title" (3-6 words). No markdown, no explanation.
 
 Note:
 ` + body
 
-	text, err := localChat(baseURL, modelID,
+	text, err := c.chat(
 		"You label notes. Output only raw JSON.",
 		prompt,
 		0.2,
@@ -143,8 +67,8 @@ Note:
 	return meta, nil
 }
 
-// DetectActionables asks a local LLM server whether a note contains clear tasks.
-func DetectActionables(baseURL, model, body string) (bool, error) {
+// DetectActionables asks the selected provider whether a note contains clear tasks.
+func (c *Client) DetectActionables(body string) (bool, error) {
 	start := time.Now()
 	recordBegin()
 	fail := func(err error) (bool, error) {
@@ -152,10 +76,6 @@ func DetectActionables(baseURL, model, body string) (bool, error) {
 		return false, err
 	}
 
-	baseURL = strings.TrimRight(baseURL, "/")
-	if baseURL == "" {
-		return fail(fmt.Errorf("local llm url is empty"))
-	}
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return fail(fmt.Errorf("note body is empty"))
@@ -164,14 +84,9 @@ func DetectActionables(baseURL, model, body string) (bool, error) {
 		body = body[:4000]
 	}
 
-	modelID, err := resolveModel(baseURL, model)
-	if err != nil {
-		return fail(err)
-	}
-
 	prompt := actionablesPrompt(body)
 
-	text, err := localChat(baseURL, modelID,
+	text, err := c.chat(
 		"You classify focus-session notes for extractable tasks. Output only raw JSON.",
 		prompt,
 		0.1,
@@ -189,7 +104,7 @@ func DetectActionables(baseURL, model, body string) (bool, error) {
 }
 
 // ExtractActionables pulls concrete task strings from a note body.
-func ExtractActionables(baseURL, model, body string) ([]string, error) {
+func (c *Client) ExtractActionables(body string) ([]string, error) {
 	start := time.Now()
 	recordBegin()
 	fail := func(err error) ([]string, error) {
@@ -197,10 +112,6 @@ func ExtractActionables(baseURL, model, body string) ([]string, error) {
 		return nil, err
 	}
 
-	baseURL = strings.TrimRight(baseURL, "/")
-	if baseURL == "" {
-		return fail(fmt.Errorf("local llm url is empty"))
-	}
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return fail(fmt.Errorf("note body is empty"))
@@ -209,13 +120,8 @@ func ExtractActionables(baseURL, model, body string) ([]string, error) {
 		body = body[:4000]
 	}
 
-	modelID, err := resolveModel(baseURL, model)
-	if err != nil {
-		return fail(err)
-	}
-
 	prompt := extractActionablesPrompt(body)
-	text, err := localChat(baseURL, modelID,
+	text, err := c.chat(
 		"You extract actionable tasks from notes. Output only raw JSON.",
 		prompt,
 		0.1,
@@ -403,202 +309,6 @@ func reversedLines(s string) []string {
 	return lines
 }
 
-func localChat(baseURL, modelID, system, user string, temperature float64) (string, error) {
-	text, err := openAIChat(baseURL, modelID, system, user, temperature)
-	if err == nil {
-		return text, nil
-	}
-	ollamaText, ollamaErr := ollamaChat(baseURL, modelID, system, user, temperature)
-	if ollamaErr == nil {
-		return ollamaText, nil
-	}
-	return "", fmt.Errorf("local llm chat failed: openai-compatible: %v; ollama: %v", err, ollamaErr)
-}
-
-func openAIChat(baseURL, modelID, system, user string, temperature float64) (string, error) {
-	reqBody, err := noteChatRequest(modelID, system, user, temperature)
-	if err != nil {
-		return "", err
-	}
-
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
-	}
-
-	var cr chatResponse
-	if err := json.Unmarshal(raw, &cr); err != nil {
-		return "", err
-	}
-	if len(cr.Choices) == 0 {
-		return "", fmt.Errorf("empty response")
-	}
-
-	msg := cr.Choices[0].Message
-	text := strings.TrimSpace(msg.Content)
-	if text == "" {
-		text = strings.TrimSpace(msg.ReasoningContent)
-	}
-	if text == "" {
-		return "", fmt.Errorf("model returned no text")
-	}
-	return text, nil
-}
-
-func ollamaChat(baseURL, modelID, system, user string, temperature float64) (string, error) {
-	req := ollamaChatRequest{
-		Model: modelID,
-		Messages: []chatMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: user},
-		},
-		Stream: false,
-	}
-	req.Options.Temperature = temperature
-
-	reqBody, err := json.Marshal(req)
-	if err != nil {
-		return "", err
-	}
-
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Post(baseURL+"/api/chat", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
-	}
-
-	var cr ollamaChatResponse
-	if err := json.Unmarshal(raw, &cr); err != nil {
-		return "", err
-	}
-	text := strings.TrimSpace(cr.Message.Content)
-	if text == "" {
-		return "", fmt.Errorf("model returned no text")
-	}
-	return text, nil
-}
-
-// resolveModel picks the configured model or auto-detects the first local chat
-// model (skipping embedding models).
-func resolveModel(baseURL, configured string) (string, error) {
-	if configured != "" {
-		return configured, nil
-	}
-
-	resolvedModelMu.Lock()
-	if m := resolvedModels[baseURL]; m != "" {
-		resolvedModelMu.Unlock()
-		return m, nil
-	}
-	resolvedModelMu.Unlock()
-
-	if picked, err := resolveOpenAIModel(baseURL); err == nil {
-		cacheResolvedModel(baseURL, picked)
-		return picked, nil
-	} else if picked, ollamaErr := resolveOllamaModel(baseURL); ollamaErr == nil {
-		cacheResolvedModel(baseURL, picked)
-		return picked, nil
-	} else {
-		return "", fmt.Errorf("local llm models: openai-compatible: %v; ollama: %v", err, ollamaErr)
-	}
-}
-
-func resolveOpenAIModel(baseURL string) (string, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(baseURL + "/v1/models")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
-	}
-
-	var mr modelsResponse
-	if err := json.Unmarshal(raw, &mr); err != nil {
-		return "", err
-	}
-
-	var picked string
-	for _, m := range mr.Data {
-		id := strings.ToLower(m.ID)
-		if id == "" || strings.Contains(id, "embed") {
-			continue
-		}
-		picked = m.ID
-		break
-	}
-	if picked == "" {
-		return "", fmt.Errorf("no chat model found")
-	}
-	return picked, nil
-}
-
-func resolveOllamaModel(baseURL string) (string, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(baseURL + "/api/tags")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%d: %s", resp.StatusCode, trimErr(string(raw)))
-	}
-
-	var tr ollamaTagsResponse
-	if err := json.Unmarshal(raw, &tr); err != nil {
-		return "", err
-	}
-	for _, m := range tr.Models {
-		name := m.Name
-		if name == "" {
-			name = m.Model
-		}
-		id := strings.ToLower(name)
-		if id == "" || strings.Contains(id, "embed") {
-			continue
-		}
-		return name, nil
-	}
-	return "", fmt.Errorf("no chat model found (run `ollama pull <model>`)")
-}
-
-func cacheResolvedModel(baseURL, model string) {
-	resolvedModelMu.Lock()
-	resolvedModels[baseURL] = model
-	resolvedModel = model
-	resolvedModelMu.Unlock()
-}
-
 func parseNoteMeta(s string) (NoteMeta, error) {
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "```json")
@@ -667,12 +377,4 @@ func trimErr(s string) string {
 		return s[:120] + "…"
 	}
 	return s
-}
-
-// ResetModelCache clears auto-detected models (for tests).
-func ResetModelCache() {
-	resolvedModelMu.Lock()
-	resolvedModel = ""
-	resolvedModels = map[string]string{}
-	resolvedModelMu.Unlock()
 }
